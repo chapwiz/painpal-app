@@ -17,6 +17,9 @@ import SwiftData
     @Relationship(deleteRule: .cascade, inverse: \PainEntry.session)
     var entries: [PainEntry] = []
 
+    var activeEntries: [PainEntry] { entries.filter { !$0.isDeleted } }
+    var deletedEntries: [PainEntry] { entries.filter { $0.isDeleted } }
+
     init(childName: String, createdAt: Date = Date(), isDeleted: Bool = false, deletedAt: Date? = nil) {
         self.childName = childName
         self.createdAt = createdAt
@@ -42,6 +45,9 @@ import SwiftData
     var notes: String
     var transcript: String?
     var aiSummary: String?
+
+    var isDeleted: Bool = false
+    var deletedAt: Date? = nil
 
     // Structured pain details
     var trend: String = "Same"   // Better / Same / Worse
@@ -89,5 +95,17 @@ import SwiftData
         self.relievers = relievers
 
         self.session = session
+        self.isDeleted = false
+        self.deletedAt = nil
+    }
+
+    func softDelete(at date: Date = Date()) {
+        isDeleted = true
+        deletedAt = date
+    }
+
+    func restore() {
+        isDeleted = false
+        deletedAt = nil
     }
 }

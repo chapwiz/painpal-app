@@ -15,7 +15,7 @@ struct SessionDetailView: View {
     @State private var showingRecord = false
 
     private var entriesSorted: [PainEntry] {
-        session.entries.sorted { $0.timestamp > $1.timestamp }
+        session.activeEntries.sorted { $0.timestamp > $1.timestamp }
     }
 
     var body: some View {
@@ -103,8 +103,7 @@ struct SessionDetailView: View {
                     .onDelete { idx in
                         let toDelete = idx.map { entriesSorted[$0] }
                         for e in toDelete {
-                            session.entries.removeAll { $0.id == e.id }
-                            ctx.delete(e)
+                            e.softDelete()
                         }
                     }
                 }
@@ -170,4 +169,3 @@ struct SessionDetailView: View {
     }
     .modelContainer(container)
 }
-
