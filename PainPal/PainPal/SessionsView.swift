@@ -11,6 +11,7 @@ import SwiftData
 struct SessionsView: View {
     @Environment(\.modelContext) private var ctx
     @Query(filter: #Predicate<Session> { !$0.isDeleted }) private var sessions: [Session]
+    @Query(filter: #Predicate<PainEntry> { !$0.isDeleted }) private var activePainEntries: [PainEntry]
     
     @State private var showingNew = false
     @State private var childName = ""
@@ -55,14 +56,14 @@ struct SessionsView: View {
             case .oldest:
                 return $0.createdAt < $1.createdAt
             case .mostEntries:
-                if $0.entries.count != $1.entries.count {
-                    return $0.entries.count > $1.entries.count
-                }
+                let a = activeEntryCount(for: $0)
+                let b = activeEntryCount(for: $1)
+                if a != b { return a > b }
                 return $0.createdAt > $1.createdAt
             case .leastEntries:
-                if $0.entries.count != $1.entries.count {
-                    return $0.entries.count < $1.entries.count
-                }
+                let a = activeEntryCount(for: $0)
+                let b = activeEntryCount(for: $1)
+                if a != b { return a < b }
                 return $0.createdAt > $1.createdAt
             }
         }
@@ -70,6 +71,20 @@ struct SessionsView: View {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return base }
         return base.filter { $0.childName.localizedCaseInsensitiveContains(q) }
+    }
+    
+    private var activeEntryCountBySessionID: [PersistentIdentifier: Int] {
+        var dict: [PersistentIdentifier: Int] = [:]
+        for e in activePainEntries {
+            if let sid = e.session?.persistentModelID {
+                dict[sid, default: 0] += 1
+            }
+        }
+        return dict
+    }
+
+    private func activeEntryCount(for session: Session) -> Int {
+        activeEntryCountBySessionID[session.persistentModelID] ?? 0
     }
     
     private func initials(for name: String) -> String {
@@ -179,14 +194,15 @@ struct SessionsView: View {
 
                 Spacer()
 
-                Text("\(s.entries.count)")
+                let count = activeEntryCount(for: s)
+                Text("\(count)")
                     .font(.caption)
                     .fontWeight(.semibold)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(.thinMaterial)
                     .clipShape(Capsule())
-                    .accessibilityLabel("\(s.entries.count) entr\(s.entries.count == 1 ? "y" : "ies")")
+                    .accessibilityLabel("\(count) entr\(count == 1 ? "y" : "ies")")
             }
             .padding(.vertical, 4)
         }
