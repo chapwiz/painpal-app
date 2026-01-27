@@ -8,12 +8,6 @@
 import Foundation
 import SwiftData
 
-enum PainScale: String, CaseIterable, Identifiable, Codable {
-    case wongBaker = "Wong-Baker"
-    case rFLACC = "r-FLACC"
-    var id: String { rawValue }
-}
-
 @Model final class Session {
     var childName: String
     var createdAt: Date = Date()
@@ -22,6 +16,9 @@ enum PainScale: String, CaseIterable, Identifiable, Codable {
 
     @Relationship(deleteRule: .cascade, inverse: \PainEntry.session)
     var entries: [PainEntry] = []
+
+    var activeEntries: [PainEntry] { entries.filter { !$0.isDeleted } }
+    var deletedEntries: [PainEntry] { entries.filter { $0.isDeleted } }
 
     init(childName: String, createdAt: Date = Date(), isDeleted: Bool = false, deletedAt: Date? = nil) {
         self.childName = childName
@@ -48,6 +45,22 @@ enum PainScale: String, CaseIterable, Identifiable, Codable {
     var notes: String
     var transcript: String?
     var aiSummary: String?
+
+    var isDeleted: Bool = false
+    var deletedAt: Date? = nil
+
+    // Structured pain details
+    var trend: String = "Same"   // Better / Same / Worse
+
+    var durationMinutes: Int = 0
+
+    // Multi-select fields (stored as transformable arrays)
+    var locations: [String] = []
+    var qualityWords: [String] = []
+    var symptoms: [String] = []
+    var triggers: [String] = []
+    var relievers: [String] = []
+
     var session: Session?
 
     init(
@@ -57,6 +70,13 @@ enum PainScale: String, CaseIterable, Identifiable, Codable {
         timestamp: Date = Date(),
         transcript: String? = nil,
         aiSummary: String? = nil,
+        trend: String = "Same",
+        durationMinutes: Int = 0,
+        locations: [String] = [],
+        qualityWords: [String] = [],
+        symptoms: [String] = [],
+        triggers: [String] = [],
+        relievers: [String] = [],
         session: Session? = nil
     ) {
         self.scale = scale
@@ -65,6 +85,27 @@ enum PainScale: String, CaseIterable, Identifiable, Codable {
         self.timestamp = timestamp
         self.transcript = transcript
         self.aiSummary = aiSummary
+
+        self.trend = trend
+        self.durationMinutes = durationMinutes
+        self.locations = locations
+        self.qualityWords = qualityWords
+        self.symptoms = symptoms
+        self.triggers = triggers
+        self.relievers = relievers
+
         self.session = session
+        self.isDeleted = false
+        self.deletedAt = nil
+    }
+
+    func softDelete(at date: Date = Date()) {
+        isDeleted = true
+        deletedAt = date
+    }
+
+    func restore() {
+        isDeleted = false
+        deletedAt = nil
     }
 }

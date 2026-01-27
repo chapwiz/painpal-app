@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		52EBCE122F1D952300C40F06 /* MultiPicker in Frameworks */ = {isa = PBXBuildFile; productRef = 52EBCE112F1D952300C40F06 /* MultiPicker */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		52C16CDF2EF8494500117A1E /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				52EBCE122F1D952300C40F06 /* MultiPicker in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +117,7 @@
 			);
 			name = PainPal;
 			packageProductDependencies = (
+				52EBCE112F1D952300C40F06 /* MultiPicker */,
 			);
 			productName = PainPal;
 			productReference = 52C16CCF2EF8494300117A1E /* PainPal.app */;
@@ -195,6 +201,9 @@
 			);
 			mainGroup = 52C16CC62EF8494300117A1E;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				52EBCE102F1D952300C40F06 /* XCRemoteSwiftPackageReference "MultiPicker" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 52C16CD02EF8494300117A1E /* Products */;
 			projectDirPath = "";
@@ -578,6 +587,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		52EBCE102F1D952300C40F06 /* XCRemoteSwiftPackageReference "MultiPicker" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/toastersocks/MultiPicker";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		52EBCE112F1D952300C40F06 /* MultiPicker */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 52EBCE102F1D952300C40F06 /* XCRemoteSwiftPackageReference "MultiPicker" */;
+			productName = MultiPicker;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 52C16CC72EF8494300117A1E /* Project object */;
 }

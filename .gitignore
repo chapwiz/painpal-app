@@ -7,6 +7,7 @@ DerivedData/
 *.moved-aside
 *.xccheckout
 *.xcscmblueprint
+**/WorkspaceSettings.xcsettings
 
 # SwiftPM
 .build/
