@@ -15,6 +15,8 @@ struct SessionsView: View {
 
     @State private var showingNew = false
     @State private var childName = ""
+    @State private var dateOfBirth: Date = Calendar.current.date(byAdding: .year, value: -2, to: Date()) ?? Date()
+    @State private var hasDateOfBirth: Bool = false
 
     // Quick record from Sessions tab
     @State private var recordingSession: Session? = nil
@@ -358,8 +360,29 @@ struct SessionsView: View {
     private var newSessionSheet: some View {
         NavigationStack {
             Form {
-                TextField("Child name", text: $childName)
-                    .textInputAutocapitalization(.words)
+                Section("Child") {
+                    TextField("Child name", text: $childName)
+                        .textInputAutocapitalization(.words)
+
+                    Toggle("Add date of birth", isOn: $hasDateOfBirth)
+
+                    if hasDateOfBirth {
+                        DatePicker(
+                            "Date of birth",
+                            selection: $dateOfBirth,
+                            in: ...Date(),
+                            displayedComponents: .date
+                        )
+                        .datePickerStyle(.compact)
+
+                        // Live preview of computed age
+                        if let age = Session.ageString(for: dateOfBirth) {
+                            Text("Age: \(age)")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
             .navigationTitle("New Session")
             .toolbar {
@@ -370,8 +393,11 @@ struct SessionsView: View {
                     Button("Create") {
                         let trimmed = childName.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !trimmed.isEmpty else { return }
-                        ctx.insert(Session(childName: trimmed))
+                        let dob: Date? = hasDateOfBirth ? dateOfBirth : nil
+                        ctx.insert(Session(childName: trimmed, dateOfBirth: dob))
                         childName = ""
+                        hasDateOfBirth = false
+                        dateOfBirth = Calendar.current.date(byAdding: .year, value: -2, to: Date()) ?? Date()
                         showingNew = false
                     }
                     .disabled(childName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
