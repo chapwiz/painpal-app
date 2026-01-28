@@ -13,6 +13,9 @@ struct RecordEntryView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var ctx
     @Bindable var session: Session
+
+    // If non-nil, the view edits an existing entry instead of creating a new one.
+    private var editingEntry: PainEntry?
     
     @Environment(\.colorScheme) private var colorScheme
 
@@ -123,6 +126,39 @@ struct RecordEntryView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    init(session: Session, editingEntry: PainEntry? = nil) {
+        self.session = session
+        self.editingEntry = editingEntry
+
+        if let e = editingEntry {
+            _scale = State(initialValue: e.scale)
+            _score = State(initialValue: e.score)
+            _notes = State(initialValue: e.notes)
+
+            _transcript = State(initialValue: e.transcript ?? "")
+            _aiSummary = State(initialValue: e.aiSummary ?? "")
+
+            _trend = State(initialValue: e.trend)
+            _durationMinutes = State(initialValue: e.durationMinutes)
+
+            _selectedLocations = State(initialValue: Set(e.locations))
+            _selectedQualities = State(initialValue: Set(e.qualityWords))
+            _selectedSymptoms = State(initialValue: Set(e.symptoms))
+            _selectedTriggers = State(initialValue: Set(e.triggers))
+            _selectedRelievers = State(initialValue: Set(e.relievers))
+
+            // Clear the "other" text fields when editing.
+            _otherLocation = State(initialValue: "")
+            _otherQuality = State(initialValue: "")
+            _otherSymptom = State(initialValue: "")
+            _otherTrigger = State(initialValue: "")
+            _otherReliever = State(initialValue: "")
+        } else {
+            // New entry
+            self.editingEntry = nil
         }
     }
 
@@ -246,30 +282,60 @@ struct RecordEntryView: View {
 //                TextField("AI summary (optional)", text: $aiSummary, axis: .vertical)
 //            }
         }
-        .navigationTitle("Record")
+        .navigationTitle(editingEntry == nil ? "Record" : "Edit Record")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button("Save") {
-                    let entry = PainEntry(
-                        scale: scale,
-                        score: score,
-                        notes: notes,
-                        transcript: transcript.isEmpty ? nil : transcript,
-                        aiSummary: aiSummary.isEmpty ? nil : aiSummary,
-                        trend: trend,
-                        durationMinutes: durationMinutes,
-                        locations: Array(selectedLocations).sorted(),
-                        qualityWords: Array(selectedQualities).sorted(),
-                        symptoms: Array(selectedSymptoms).sorted(),
-                        triggers: Array(selectedTriggers).sorted(),
-                        relievers: Array(selectedRelievers).sorted(),
-                        session: session
-                    )
-                    ctx.insert(entry)
-                    dismiss()
+                Button(editingEntry == nil ? "Save" : "Update") {
+                    if let e = editingEntry {
+                        // Update existing entry in-place
+                        e.scale = scale
+                        e.score = score
+                        e.notes = notes
+
+                        let t = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                        e.transcript = t.isEmpty ? nil : t
+
+                        let s = aiSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+                        e.aiSummary = s.isEmpty ? nil : s
+
+                        e.trend = trend
+                        e.durationMinutes = durationMinutes
+
+                        e.locations = Array(selectedLocations).sorted()
+                        e.qualityWords = Array(selectedQualities).sorted()
+                        e.symptoms = Array(selectedSymptoms).sorted()
+                        e.triggers = Array(selectedTriggers).sorted()
+                        e.relievers = Array(selectedRelievers).sorted()
+
+                        // Defensive: ensure it isn't in Recently Deleted
+                        e.isDeleted = false
+
+                        try? ctx.save()
+                        dismiss()
+                    } else {
+                        // Create new entry
+                        let entry = PainEntry(
+                            scale: scale,
+                            score: score,
+                            notes: notes,
+                            transcript: transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : transcript,
+                            aiSummary: aiSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : aiSummary,
+                            trend: trend,
+                            durationMinutes: durationMinutes,
+                            locations: Array(selectedLocations).sorted(),
+                            qualityWords: Array(selectedQualities).sorted(),
+                            symptoms: Array(selectedSymptoms).sorted(),
+                            triggers: Array(selectedTriggers).sorted(),
+                            relievers: Array(selectedRelievers).sorted(),
+                            session: session
+                        )
+                        ctx.insert(entry)
+                        try? ctx.save()
+                        dismiss()
+                    }
                 }
             }
         }
