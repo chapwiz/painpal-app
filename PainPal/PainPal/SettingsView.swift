@@ -14,6 +14,8 @@ struct SettingsView: View {
 
     @Query private var allSessions: [Session]
     @Query private var allEntries: [PainEntry]
+    @Query(filter: #Predicate<Session> { $0.isDeleted }) private var deletedSessions: [Session]
+    @Query(filter: #Predicate<PainEntry> { $0.isDeleted }) private var deletedEntries: [PainEntry]
 
     var body: some View {
         Form {
@@ -22,6 +24,28 @@ struct SettingsView: View {
                 Text("No cloud sync in prototype.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+            
+            Section("Recently Deleted") {
+                let ds = deletedSessions.count
+                let de = deletedEntries.count
+
+                if ds == 0 && de == 0 {
+                    Text("No recently deleted items")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Sessions: \(ds)")
+                    Text("Entries: \(de)")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                NavigationLink {
+                    HistoryView()
+                } label: {
+                    Label("Manage Recently Deleted", systemImage: "trash")
+                }
             }
             
             // Delete this before going live, just for testing

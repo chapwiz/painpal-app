@@ -22,13 +22,6 @@ struct ContentView: View {
             }
 
             NavigationStack {
-                HistoryView()
-            }
-            .tabItem {
-                Label("Recently Deleted", systemImage: "trash")
-            }
-
-            NavigationStack {
                 ExportView()
             }
             .tabItem {
@@ -40,6 +33,14 @@ struct ContentView: View {
             }
             .tabItem {
                 Label("Settings", systemImage: "gear")
+            }
+
+            // SpeechRecognizer.swift test
+            NavigationStack {
+                SpeechTestView()
+            }
+            .tabItem {
+                Label("Speech", systemImage: "mic")
             }
         }
         .task {

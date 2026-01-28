@@ -33,9 +33,22 @@
 		52C16CE82EF8494500117A1E /* PainPalUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PainPalUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		52F7938D2F29A9FC006B05D6 /* Exceptions for "PainPal" folder in "PainPal" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 52C16CCE2EF8494300117A1E /* PainPal */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		52C16CD12EF8494300117A1E /* PainPal */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				52F7938D2F29A9FC006B05D6 /* Exceptions for "PainPal" folder in "PainPal" target */,
+			);
 			path = PainPal;
 			sourceTree = "<group>";
 		};
@@ -409,6 +422,9 @@
 				DEVELOPMENT_TEAM = LNCF25M894;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PainPal/Info.plist;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PainPal uses the microphone to capture audio for speech-to-text transcription.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "PainPal uses speech recognition to transcribe spoken descriptions of pain into text for records.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -441,6 +457,9 @@
 				DEVELOPMENT_TEAM = LNCF25M894;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PainPal/Info.plist;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PainPal uses the microphone to capture audio for speech-to-text transcription.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "PainPal uses speech recognition to transcribe spoken descriptions of pain into text for records.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
