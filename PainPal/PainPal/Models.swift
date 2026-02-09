@@ -45,7 +45,8 @@ import SwiftData
         deletedAt = nil
     }
 
-    // Age components (years, months) computed from dateOfBirth as of `referenceDate`.
+
+    // Age components (years, months) computed from dateOfBirth as of referenceDate.
     func ageComponents(asOf referenceDate: Date = Date()) -> DateComponents? {
         guard let dob = dateOfBirth else { return nil }
         return Calendar.current.dateComponents([.year, .month], from: dob, to: referenceDate)
@@ -54,7 +55,6 @@ import SwiftData
     var ageYears: Int? { ageComponents()?.year }
     var ageMonths: Int? { ageComponents()?.month }
 
-    // Human-friendly age string (e.g., "2 years, 8 months").
     var ageDisplay: String? {
         guard let comps = ageComponents() else { return nil }
         let y = comps.year ?? 0
@@ -71,7 +71,7 @@ import SwiftData
         }
     }
 
-    // Static helper used by UI without needing a Session instance.
+    // Static helper used by UI (e.g., New Session sheet) without needing a Session instance.
     static func ageString(for dob: Date, referenceDate: Date = Date()) -> String? {
         let comps = Calendar.current.dateComponents([.year, .month], from: dob, to: referenceDate)
         let y = comps.year ?? 0
