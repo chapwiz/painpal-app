@@ -13,3 +13,8 @@ DerivedData/
 .build/
 .swiftpm/
 PainPal/PainPal.xcodeproj/project.xcworkspace/xcuserdata/chapwiz.xcuserdatad/UserInterfaceState.xcuserstate
+
+.idea/
+*.iml
+.vscode/
+.jpb/
