@@ -7,7 +7,6 @@
 
 import SwiftUI
 import SwiftData
-import MultiPicker
 
 struct RecordEntryView: View {
     @Environment(\.dismiss) private var dismiss
@@ -18,6 +17,7 @@ struct RecordEntryView: View {
     private var editingEntry: PainEntry?
     
     @Environment(\.colorScheme) private var colorScheme
+    @FocusState private var focusedField: FocusField?
 
     @State private var scale: PainScale = .rFLACC
     @State private var score: Int = 0
@@ -34,6 +34,7 @@ struct RecordEntryView: View {
     // Multi-select fields (stored on PainEntry as [String])
     @State private var selectedLocations: Set<String> = []
     @State private var otherLocation: String = ""
+    @State private var locationInputMode: LocationInputMode = .hybrid
 
     @State private var selectedQualities: Set<String> = []
     @State private var otherQuality: String = ""
@@ -57,6 +58,98 @@ struct RecordEntryView: View {
         return "\(minutes)m"
     }
 
+    private enum LocationInputMode: String, CaseIterable, Identifiable {
+        case text = "Text"
+        case diagram = "Body Diagram"
+        case hybrid = "Hybrid"
+
+        var id: String { rawValue }
+    }
+
+    private enum FocusField: Hashable {
+        case otherLocation
+        case otherQuality
+        case otherSymptom
+        case otherTrigger
+        case otherReliever
+        case notes
+    }
+
+    private var predefinedLocationValues: Set<String> {
+        Set(PainLocation.allCases.map { $0.rawValue })
+    }
+
+    private var diagramSelection: Binding<Set<PainLocation>> {
+        Binding<Set<PainLocation>>(
+            get: {
+                Set(selectedLocations.compactMap(PainLocation.init(rawValue:)))
+            },
+            set: { newValue in
+                let customLocations = selectedLocations.filter { !predefinedLocationValues.contains($0) }
+                selectedLocations = customLocations.union(Set(newValue.map(\.rawValue)))
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var painLocationSection: some View {
+        Section {
+            if locationInputMode == .hybrid {
+                BodyDiagramSelectorView(selectedLocations: diagramSelection)
+                    .padding(.vertical, 4)
+            }
+
+            if locationInputMode == .hybrid {
+                HStack {
+                    TextField("Other location…", text: $otherLocation)
+                        .focused($focusedField, equals: .otherLocation)
+                        .submitLabel(.done)
+                        .onSubmit {
+                            let trimmed = otherLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !trimmed.isEmpty else { return }
+                            selectedLocations.insert(trimmed)
+                            otherLocation = ""
+                            focusedField = nil
+                        }
+
+                    Button {
+                        let trimmed = otherLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty else { return }
+                        selectedLocations.insert(trimmed)
+                        otherLocation = ""
+                        focusedField = nil
+                    } label: {
+                        Text("Add")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(otherLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+
+            let customItems = selectedLocations
+                .filter { !predefinedLocationValues.contains($0) }
+                .sorted()
+
+            if !customItems.isEmpty {
+                ForEach(customItems, id: \.self) { item in
+                    Toggle(item, isOn: Binding(
+                        get: { selectedLocations.contains(item) },
+                        set: { isOn in
+                            if isOn { selectedLocations.insert(item) } else { selectedLocations.remove(item) }
+                        }
+                    ))
+                }
+            }
+        } header: {
+            Text("Pain areas")
+        }
+        footer: {
+            Text("Choose pain areas on the body diagram or add a custom location.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
 
 
     private struct MultiSelectSection<Option>: View
@@ -69,54 +162,127 @@ struct RecordEntryView: View {
 
         @Binding var selection: Set<String>
         @Binding var otherText: String
+        let focus: FocusState<FocusField?>.Binding
+        let focusField: FocusField
+        @State private var isExpanded = false
+        @State private var storedCustomItems: [String] = []
 
-        private var predefinedSet: Set<String> {
-            Set(Option.allCases.map { $0.rawValue })
+        private let columns: [GridItem] = [
+            GridItem(.adaptive(minimum: 110), spacing: 10, alignment: .leading)
+        ]
+
+        private var predefinedItems: [String] {
+            Array(Option.allCases.map { $0.rawValue }).sorted()
         }
 
         private var customItems: [String] {
-            selection
-                .filter { !predefinedSet.contains($0) }
-                .sorted()
+            storedCustomItems.sorted()
+        }
+
+        private var allItems: [String] {
+            predefinedItems + customItems
+        }
+
+        private var selectionSummary: String {
+            let items = selection.sorted()
+            if items.isEmpty { return "None selected" }
+            if items.count <= 3 { return items.joined(separator: ", ") }
+            return "\(items.prefix(3).joined(separator: ", ")) +\(items.count - 3) more"
+        }
+
+        private var storageKey: String {
+            "painpal.custom.\(String(describing: Option.self))"
+        }
+
+        private func toggle(_ item: String) {
+            if selection.contains(item) {
+                selection.remove(item)
+            } else {
+                selection.insert(item)
+            }
+        }
+
+        private func loadCustomItems() {
+            let saved = UserDefaults.standard.stringArray(forKey: storageKey) ?? []
+            storedCustomItems = Array(Set(saved)).sorted()
+        }
+
+        private func saveCustomItems() {
+            UserDefaults.standard.set(storedCustomItems.sorted(), forKey: storageKey)
         }
 
         private func addOther() {
             let trimmed = otherText.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
+
+            if !predefinedItems.contains(trimmed) && !storedCustomItems.contains(trimmed) {
+                storedCustomItems.append(trimmed)
+                storedCustomItems.sort()
+                saveCustomItems()
+            }
+
             selection.insert(trimmed)
             otherText = ""
         }
 
         var body: some View {
             Section {
-                MultiPicker(pickerLabel, selection: $selection) {
-                    ForEach(Array(Option.allCases), id: \.id) { opt in
-                        Text(opt.rawValue)
-                            .mpTag(opt.rawValue)
-                    }
-                }
-                .mpPickerStyle(.navigationLink)
-
-                HStack {
-                    TextField(otherPlaceholder, text: $otherText)
-                    Button("Add") { addOther() }
-                        .disabled(otherText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-
-                if !customItems.isEmpty {
-                    Divider()
-
-                    Text("Custom")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-
-                    ForEach(customItems, id: \.self) { item in
-                        Toggle(item, isOn: Binding(
-                            get: { selection.contains(item) },
-                            set: { isOn in
-                                if isOn { selection.insert(item) } else { selection.remove(item) }
+                DisclosureGroup(isExpanded: $isExpanded) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+                            ForEach(allItems, id: \.self) { item in
+                                Button {
+                                    toggle(item)
+                                } label: {
+                                    Text(item)
+                                        .font(.subheadline)
+                                        .foregroundStyle(selection.contains(item) ? Color.white : Color.primary)
+                                        .multilineTextAlignment(.leading)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 10)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                .fill(selection.contains(item) ? Color.green : Color.gray.opacity(0.18))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                .stroke(selection.contains(item) ? Color.green : Color.gray.opacity(0.25), lineWidth: 1)
+                                        )
+                                }
+                                .buttonStyle(.plain)
                             }
-                        ))
+                        }
+
+                        HStack {
+                            TextField(otherPlaceholder, text: $otherText)
+                                .focused(focus, equals: focusField)
+                                .submitLabel(.done)
+                                .onSubmit {
+                                    addOther()
+                                    focus.wrappedValue = nil
+                                }
+
+                            Button {
+                                addOther()
+                                focus.wrappedValue = nil
+                            } label: {
+                                Text("Add")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(otherText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(pickerLabel)
+                            .foregroundStyle(.primary)
+
+                        Text(selectionSummary)
+                            .font(.footnote)
+                            .foregroundStyle(selection.isEmpty ? .secondary : .primary)
+                            .lineLimit(2)
                     }
                 }
             } header: {
@@ -125,6 +291,9 @@ struct RecordEntryView: View {
                 Text(footer)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+            .onAppear {
+                loadCustomItems()
             }
         }
     }
@@ -156,14 +325,18 @@ struct RecordEntryView: View {
             _otherSymptom = State(initialValue: "")
             _otherTrigger = State(initialValue: "")
             _otherReliever = State(initialValue: "")
+            _locationInputMode = State(initialValue: .hybrid)
         } else {
             // New entry
+            _locationInputMode = State(initialValue: .hybrid)
             self.editingEntry = nil
         }
     }
 
     var body: some View {
         Form {
+            painLocationSection
+
             Section {
                 Picker("Scale", selection: $scale) {
                     ForEach(PainScale.allCases) { s in
@@ -222,22 +395,15 @@ struct RecordEntryView: View {
                 Text("Pain Assessment")
             }
 
-            MultiSelectSection<PainLocation>(
-                title: "Pain areas",
-                footer: "Select one or more areas. Add a custom area if needed.",
-                pickerLabel: "Choose areas",
-                otherPlaceholder: "Other location…",
-                selection: $selectedLocations,
-                otherText: $otherLocation
-            )
-
             MultiSelectSection<PainQuality>(
                 title: "Pain quality",
                 footer: "Examples: sharp, dull, throbbing, burning.",
                 pickerLabel: "Choose qualities",
                 otherPlaceholder: "Other quality…",
                 selection: $selectedQualities,
-                otherText: $otherQuality
+                otherText: $otherQuality,
+                focus: $focusedField,
+                focusField: .otherQuality
             )
 
             MultiSelectSection<Symptom>(
@@ -246,7 +412,9 @@ struct RecordEntryView: View {
                 pickerLabel: "Choose symptoms",
                 otherPlaceholder: "Other symptom…",
                 selection: $selectedSymptoms,
-                otherText: $otherSymptom
+                otherText: $otherSymptom,
+                focus: $focusedField,
+                focusField: .otherSymptom
             )
 
             MultiSelectSection<Trigger>(
@@ -255,7 +423,9 @@ struct RecordEntryView: View {
                 pickerLabel: "Choose triggers",
                 otherPlaceholder: "Other trigger…",
                 selection: $selectedTriggers,
-                otherText: $otherTrigger
+                otherText: $otherTrigger,
+                focus: $focusedField,
+                focusField: .otherTrigger
             )
 
             MultiSelectSection<Reliever>(
@@ -264,11 +434,15 @@ struct RecordEntryView: View {
                 pickerLabel: "Choose relievers",
                 otherPlaceholder: "Other reliever…",
                 selection: $selectedRelievers,
-                otherText: $otherReliever
+                otherText: $otherReliever,
+                focus: $focusedField,
+                focusField: .otherReliever
             )
 
             Section {
-                TextEditor(text: $notes).frame(minHeight: 90)
+                TextEditor(text: $notes)
+                    .focused($focusedField, equals: .notes)
+                    .frame(minHeight: 90)
             } header: {
                 Text("Notes")
             } footer: {
@@ -282,11 +456,8 @@ struct RecordEntryView: View {
 //                TextField("AI summary (optional)", text: $aiSummary, axis: .vertical)
 //            }
         }
-        .navigationTitle(editingEntry == nil ? "Record" : "Edit Record")
+        .scrollDismissesKeyboard(.interactively)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }
-            }
             ToolbarItem(placement: .confirmationAction) {
                 Button(editingEntry == nil ? "Save" : "Update") {
                     if let e = editingEntry {
