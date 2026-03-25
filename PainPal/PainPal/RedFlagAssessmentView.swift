@@ -34,76 +34,69 @@ struct RedFlagAssessmentView: View {
     }
 
     var body: some View {
-        Form {
-            Section("Preview") {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(childName)
-                        .font(.headline)
-                    if let ageDisplay {
-                        Text(ageDisplay)
-                            .font(.caption)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if isRunning {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Assessing red flags...")
                             .foregroundStyle(.secondary)
                     }
-                    Text("Using last \(lastN) record\(lastN == 1 ? "" : "s")")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Caregiver note to feed the model") {
-                Text(note)
-                    .font(.footnote)
-                    .textSelection(.enabled)
-            }
-
-            Section("AI") {
-                Button(isRunning ? "Analysing..." : "Assess red flags / next steps") {
-                    runAssessment()
-                }
-                .disabled(isRunning || note.isEmpty)
-
-                if let err = errorText {
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                } else if let err = errorText {
                     Text(err)
                         .foregroundStyle(.red)
-                }
-            }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                } else if let a = result {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Danger level: \(a.dangerLevel)")
+                            .font(.headline)
 
-            if let a = result {
-                Section("Assessment") {
-                    Text("Danger level: \(a.dangerLevel)")
-                        .font(.headline)
-                    Text(a.whyThisLevel)
-                    Text(a.recommendedNextStep)
+                        Text(a.whyThisLevel)
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                    if !a.questionsToAskNext.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Questions:")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                        Text(a.recommendedNextStep)
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                            ForEach(Array(a.questionsToAskNext.enumerated()), id: \.offset) { _, q in
-                                Text("• \(q)")
+                        if !a.redFlagsDetected.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Red flags:")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
+
+                                ForEach(Array(a.redFlagsDetected.enumerated()), id: \.offset) { _, flag in
+                                    Text("• \(flag)")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+
+                        if !a.questionsToAskNext.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Questions:")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+
+                                ForEach(Array(a.questionsToAskNext.enumerated()), id: \.offset) { _, q in
+                                    Text("• \(q)")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
                             }
                         }
                     }
-
-                    if !a.redFlagsDetected.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Red flags:")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-
-                            ForEach(Array(a.redFlagsDetected.enumerated()), id: \.offset) { _, flag in
-                                Text("• \(flag)")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                } else {
+                    Text("No red-flag assessment available.")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
                 }
             }
         }

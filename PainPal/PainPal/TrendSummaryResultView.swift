@@ -34,82 +34,30 @@ struct TrendSummaryResultView: View {
     }
 
     var body: some View {
-        Form {
-            Section("Preview") {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(childName)
-                        .font(.headline)
-                    if let ageDisplay {
-                        Text(ageDisplay)
-                            .font(.caption)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if isRunning {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Summarising trend...")
                             .foregroundStyle(.secondary)
                     }
-                    Text("Using last \(lastN) record\(lastN == 1 ? "" : "s")")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Caregiver note to feed the model") {
-                Text(note)
-                    .font(.footnote)
-                    .textSelection(.enabled)
-            }
-
-            Section("AI") {
-                Button(isRunning ? "Summarising..." : "Summarise trend") {
-                    runTrendSummary()
-                }
-                .disabled(isRunning || note.isEmpty)
-
-                if let err = errorText {
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                } else if let err = errorText {
                     Text(err)
                         .foregroundStyle(.red)
-                }
-            }
-
-            if let t = result {
-                Section("Trend Summary") {
-                    Text("Trend: \(t.trend)")
-                        .font(.headline)
-
-                    if !t.scoreSeriesLatestToOldest.isEmpty {
-                        Text("Scores: " + t.scoreSeriesLatestToOldest.map(String.init).joined(separator: " → "))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                } else if let t = result {
                     Text(t.oneParagraphSummary)
-
-                    if !t.redFlags.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Red flags:")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-
-                            ForEach(Array(t.redFlags.enumerated()), id: \.offset) { _, flag in
-                                Text("• \(flag)")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-
-                    if !t.questionsToAskNext.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Questions:")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-
-                            ForEach(Array(t.questionsToAskNext.enumerated()), id: \.offset) { _, q in
-                                Text("• \(q)")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                } else {
+                    Text("No trend summary available.")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
                 }
             }
         }
