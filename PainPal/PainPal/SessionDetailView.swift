@@ -31,6 +31,10 @@ private enum AIFlowDestination: String, Identifiable {
     var id: String { rawValue }
 }
 
+private struct SelectedEntryTarget: Identifiable, Equatable {
+    let id: PersistentIdentifier
+}
+
 // Displays a single child session and its pain records (timeline).
 //
 // Key idea: we soft-delete PainEntry records by toggling `isDeleted` so they can be restored
@@ -56,126 +60,21 @@ struct SessionDetailView: View {
     @State private var selectedCalendarDay: Date?
     @State private var calendarTransitionDirection: Int = 0
     @State private var calendarAnimationToken = UUID()
+    @State private var selectedEntryForRecording: SelectedEntryTarget?
+
+    
+    // Keep the record destination stable so SwiftUI does not recreate it on every body update.
+    private let recordEntryView: RecordEntryView
 
     init(session: Session) {
         self.session = session
-        // Capture the session's persistent identifier for use inside the SwiftData predicate.
-        // Predicates are expression-based, so comparing by persistentModelID is safer than
-        // capturing the Session model object directly.
         let sid = session.persistentModelID
-        // Fetch only entries that belong to this session AND are not soft-deleted.
         _entries = Query(
             filter: #Predicate<PainEntry> { $0.session?.persistentModelID == sid && !$0.isDeleted },
             sort: \PainEntry.timestamp,
             order: .reverse
         )
-    }
-
-    private func groupEntriesByDay(_ entries: [PainEntry]) -> [(day: Date, entries: [PainEntry])] {
-        if entries.isEmpty { return [] }
-        let grouped = Dictionary(grouping: entries) { e in
-            Calendar.current.startOfDay(for: e.timestamp)
-        }
-        let sortedDays = grouped.keys.sorted(by: >)
-        let result: [(Date, [PainEntry])] = sortedDays.map { day in
-            let dayEntries = (grouped[day] ?? []).sorted { $0.timestamp > $1.timestamp }
-            return (day, dayEntries)
-        }
-        return result
-    }
-
-    private var computedAgeString: String? {
-        guard let dob = session.dateOfBirth else { return nil }
-        return Session.ageString(for: dob)
-    }
-
-    private func displayText(for rawLocation: String) -> String {
-        PainLocation.allCases.first(where: { $0.rawValue == rawLocation })?.displayName ?? rawLocation
-    }
-
-    private func delete(_ entry: PainEntry) {
-        entry.softDelete()
-        try? ctx.save()
-    }
-
-    private func shiftCalendarMonth(by offset: Int) {
-        guard let newMonth = Calendar.current.date(byAdding: .month, value: offset, to: calendarMonth) else { return }
-        calendarTransitionDirection = offset >= 0 ? 1 : -1
-        withAnimation(.easeInOut(duration: 0.26)) {
-            calendarMonth = Calendar.current.startOfMonth(for: newMonth)
-            calendarAnimationToken = UUID()
-        }
-    }
-
-    private func updateCalendarMonth(month: Int? = nil, year: Int? = nil) {
-        let calendar = Calendar.current
-        var components = calendar.dateComponents([.year, .month], from: calendarMonth)
-        if let month { components.month = month }
-        if let year { components.year = year }
-        guard let newDate = calendar.date(from: components) else { return }
-
-        let newStart = calendar.startOfMonth(for: newDate)
-        let currentComponents = calendar.dateComponents([.year, .month], from: calendarMonth)
-        let newComponents = calendar.dateComponents([.year, .month], from: newStart)
-
-        let currentIndex = (currentComponents.year ?? 0) * 12 + (currentComponents.month ?? 0)
-        let newIndex = (newComponents.year ?? 0) * 12 + (newComponents.month ?? 0)
-        calendarTransitionDirection = newIndex >= currentIndex ? 1 : -1
-
-        withAnimation(.easeInOut(duration: 0.26)) {
-            calendarMonth = newStart
-            calendarAnimationToken = UUID()
-        }
-    }
-
-    private var groupedEntriesByDay: [Date: [PainEntry]] {
-        Dictionary(grouping: entries) { e in
-            Calendar.current.startOfDay(for: e.timestamp)
-        }
-    }
-
-    private var selectedDayEntries: [PainEntry] {
-        guard let selectedCalendarDay else { return [] }
-        let day = Calendar.current.startOfDay(for: selectedCalendarDay)
-        return (groupedEntriesByDay[day] ?? []).sorted { $0.timestamp > $1.timestamp }
-    }
-
-    private var currentMonthTitle: String {
-        calendarMonth.formatted(.dateTime.month(.wide).year())
-    }
-
-    private var monthDays: [Date?] {
-        let calendar = Calendar.current
-        let start = calendar.startOfMonth(for: calendarMonth)
-        guard let dayRange = calendar.range(of: .day, in: .month, for: start) else { return [] }
-
-        let weekdayOfFirst = calendar.component(.weekday, from: start)
-        let leadingEmpty = (weekdayOfFirst - calendar.firstWeekday + 7) % 7
-
-        var result: [Date?] = Array(repeating: nil, count: leadingEmpty)
-        for day in dayRange {
-            if let date = calendar.date(byAdding: .day, value: day - 1, to: start) {
-                result.append(date)
-            }
-        }
-        while result.count % 7 != 0 {
-            result.append(nil)
-        }
-        return result
-    }
-
-    private func entries(for day: Date) -> [PainEntry] {
-        let key = Calendar.current.startOfDay(for: day)
-        return (groupedEntriesByDay[key] ?? []).sorted { $0.timestamp > $1.timestamp }
-    }
-
-    private func maxScore(for day: Date) -> Int? {
-        entries(for: day).map(\.score).max()
-    }
-
-    private func tintOpacity(for day: Date) -> Double {
-        guard let maxScore = maxScore(for: day) else { return 0 }
-        return 0.14 + (Double(maxScore) / 10.0) * 0.36
+        self.recordEntryView = RecordEntryView(session: session)
     }
 
     var body: some View {
@@ -190,9 +89,7 @@ struct SessionDetailView: View {
         .headerProminence(.increased)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                NavigationLink {
-                    RecordEntryView(session: session)
-                } label: {
+                NavigationLink(destination: recordEntryView) {
                     Image(systemName: "plus")
                 }
 
@@ -310,7 +207,7 @@ struct SessionDetailView: View {
                         lastN: analysisCount,
                         note: preparedCaregiverNote
                     )
-                    .presentationDetents([.fraction(0.56), .large])
+                    .presentationDetents([.fraction(0.56), .medium, .large])
                     .presentationDragIndicator(.visible)
                     .presentationCornerRadius(58)
                 case .trendSummary:
@@ -320,6 +217,9 @@ struct SessionDetailView: View {
                         lastN: analysisCount,
                         note: preparedCaregiverNote
                     )
+                    .presentationDetents([.fraction(0.56), .medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationCornerRadius(58)
                 case .redFlagAssessment:
                     RedFlagAssessmentView(
                         childName: session.childName,
@@ -327,13 +227,157 @@ struct SessionDetailView: View {
                         lastN: analysisCount,
                         note: preparedCaregiverNote
                     )
+                    .presentationDetents([.fraction(0.56), .medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationCornerRadius(58)
+                }
+            }
+        }
+        .sheet(item: $selectedEntryForRecording) { target in
+            NavigationStack {
+                if let entry = entries.first(where: { $0.persistentModelID == target.id }) {
+                    RecordEntryView(session: session, editingEntry: entry)
+                } else {
+                    ContentUnavailableView("Entry unavailable", systemImage: "exclamationmark.triangle")
                 }
             }
         }
     }
+
+    private func groupEntriesByDay(_ entries: [PainEntry]) -> [(day: Date, entries: [PainEntry])] {
+        if entries.isEmpty { return [] }
+        let grouped = Dictionary(grouping: entries) { e in
+            Calendar.current.startOfDay(for: e.timestamp)
+        }
+        let sortedDays = grouped.keys.sorted(by: >)
+        let result: [(Date, [PainEntry])] = sortedDays.map { day in
+            let dayEntries = (grouped[day] ?? []).sorted { $0.timestamp > $1.timestamp }
+            return (day, dayEntries)
+        }
+        return result
+    }
+
+    private var computedAgeString: String? {
+        guard let dob = session.dateOfBirth else { return nil }
+        return Session.ageString(for: dob)
+    }
+
+    private func displayText(for rawLocation: String) -> String {
+        PainLocation.allCases.first(where: { $0.rawValue == rawLocation })?.displayName ?? rawLocation
+    }
+
+    private func delete(_ entry: PainEntry) {
+        entry.softDelete()
+        try? ctx.save()
+    }
+
+    private func shiftCalendarMonth(by offset: Int) {
+        guard let newMonth = Calendar.current.date(byAdding: .month, value: offset, to: calendarMonth) else { return }
+        calendarTransitionDirection = offset >= 0 ? 1 : -1
+        withAnimation(.easeInOut(duration: 0.26)) {
+            calendarMonth = Calendar.current.startOfMonth(for: newMonth)
+            calendarAnimationToken = UUID()
+        }
+    }
+
+    private func updateCalendarMonth(month: Int? = nil, year: Int? = nil) {
+        let calendar = Calendar.current
+        var components = calendar.dateComponents([.year, .month], from: calendarMonth)
+        if let month { components.month = month }
+        if let year { components.year = year }
+        guard let newDate = calendar.date(from: components) else { return }
+
+        let newStart = calendar.startOfMonth(for: newDate)
+        let currentComponents = calendar.dateComponents([.year, .month], from: calendarMonth)
+        let newComponents = calendar.dateComponents([.year, .month], from: newStart)
+
+        let currentIndex = (currentComponents.year ?? 0) * 12 + (currentComponents.month ?? 0)
+        let newIndex = (newComponents.year ?? 0) * 12 + (newComponents.month ?? 0)
+        calendarTransitionDirection = newIndex >= currentIndex ? 1 : -1
+
+        withAnimation(.easeInOut(duration: 0.26)) {
+            calendarMonth = newStart
+            calendarAnimationToken = UUID()
+        }
+    }
+
+    private var groupedEntriesByDay: [Date: [PainEntry]] {
+        Dictionary(grouping: entries) { e in
+            Calendar.current.startOfDay(for: e.timestamp)
+        }
+    }
+
+    private var selectedDayEntries: [PainEntry] {
+        guard let selectedCalendarDay else { return [] }
+        let day = Calendar.current.startOfDay(for: selectedCalendarDay)
+        return (groupedEntriesByDay[day] ?? []).sorted { $0.timestamp > $1.timestamp }
+    }
+
+    private var currentMonthTitle: String {
+        calendarMonth.formatted(.dateTime.month(.wide).year())
+    }
+
+    private var monthDays: [Date?] {
+        let calendar = Calendar.current
+        let start = calendar.startOfMonth(for: calendarMonth)
+        guard let dayRange = calendar.range(of: .day, in: .month, for: start) else { return [] }
+
+        let weekdayOfFirst = calendar.component(.weekday, from: start)
+        let leadingEmpty = (weekdayOfFirst - calendar.firstWeekday + 7) % 7
+
+        var result: [Date?] = Array(repeating: nil, count: leadingEmpty)
+        for day in dayRange {
+            if let date = calendar.date(byAdding: .day, value: day - 1, to: start) {
+                result.append(date)
+            }
+        }
+        while result.count % 7 != 0 {
+            result.append(nil)
+        }
+        return result
+    }
+
+    private func entries(for day: Date) -> [PainEntry] {
+        let key = Calendar.current.startOfDay(for: day)
+        return (groupedEntriesByDay[key] ?? []).sorted { $0.timestamp > $1.timestamp }
+    }
+
+    private func maxScore(for day: Date) -> Int? {
+        entries(for: day).map(\.score).max()
+    }
+
+    private func tintOpacity(for day: Date) -> Double {
+        guard let maxScore = maxScore(for: day) else { return 0 }
+        return 0.14 + (Double(maxScore) / 10.0) * 0.36
+    }
+
 }
 
 private extension SessionDetailView {
+    func medicationDisplayLines(for entry: PainEntry) -> [String] {
+        guard entry.medicineTaken else { return [] }
+
+        var lines: [String] = []
+        let trimmedName = entry.medicineName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedInstructions = entry.medicationInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmedName.isEmpty {
+            lines.append("Medicine: taken")
+        } else {
+            lines.append("Medicine: \(trimmedName)")
+        }
+
+        if !trimmedInstructions.isEmpty {
+            lines.append("Instructions: \(trimmedInstructions)")
+        }
+
+        if let reminderDate = entry.nextMedicationReminderDate {
+            lines.append("Medication reminder: \(reminderDate.formatted(date: .abbreviated, time: .shortened))")
+        }
+
+        return lines
+    }
+
     var detailView: some View {
         List {
             if entries.isEmpty {
@@ -344,8 +388,8 @@ private extension SessionDetailView {
                 ForEach(dayGroups, id: \.day) { dayGroup in
                     Section {
                         ForEach(dayGroup.entries) { e in
-                            NavigationLink {
-                                RecordEntryView(session: session, editingEntry: e)
+                            Button {
+                                selectedEntryForRecording = SelectedEntryTarget(id: e.persistentModelID)
                             } label: {
                                 VStack(alignment: .leading, spacing: 6) {
                                     HStack {
@@ -403,6 +447,12 @@ private extension SessionDetailView {
                                             .foregroundStyle(.secondary)
                                     }
 
+                                    ForEach(medicationDisplayLines(for: e), id: \.self) { line in
+                                        Text(line)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+
                                     if !e.notes.isEmpty {
                                         Text(e.notes)
                                             .font(.caption)
@@ -422,6 +472,7 @@ private extension SessionDetailView {
                                     }
                                 }
                                 .padding(.vertical, 4)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             .buttonStyle(.plain)
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -574,8 +625,8 @@ private extension SessionDetailView {
                         } else {
                             ForEach(selectedDayEntries) { e in
                                 HStack(alignment: .top, spacing: 12) {
-                                    NavigationLink {
-                                        RecordEntryView(session: session, editingEntry: e)
+                                    Button {
+                                        selectedEntryForRecording = SelectedEntryTarget(id: e.persistentModelID)
                                     } label: {
                                         VStack(alignment: .leading, spacing: 6) {
                                             HStack {
@@ -589,6 +640,12 @@ private extension SessionDetailView {
 
                                             if !e.locations.isEmpty {
                                                 Text("Areas: \(e.locations.map(displayText).joined(separator: ", "))")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+
+                                            ForEach(medicationDisplayLines(for: e), id: \.self) { line in
+                                                Text(line)
                                                     .font(.caption)
                                                     .foregroundStyle(.secondary)
                                             }
@@ -663,6 +720,30 @@ private extension SessionDetailView {
             return t.isEmpty ? "" : String(t.prefix(limit))
         }
 
+        func medicationSummary(for entry: PainEntry) -> String {
+            guard entry.medicineTaken else { return "none recorded" }
+
+            var parts: [String] = []
+
+            let trimmedName = entry.medicineName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedName.isEmpty {
+                parts.append("taken")
+            } else {
+                parts.append(trimmedName)
+            }
+
+            let trimmedInstructions = entry.medicationInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedInstructions.isEmpty {
+                parts.append("instructions: \(trimmedInstructions)")
+            }
+
+            if let reminderDate = entry.nextMedicationReminderDate {
+                parts.append("next reminder: \(df.string(from: reminderDate))")
+            }
+
+            return parts.joined(separator: "; ")
+        }
+
         let scores = recent.map(\.score)
         let scoreLine: String = {
             guard let latest = scores.first else { return "No recorded entries yet." }
@@ -680,6 +761,7 @@ private extension SessionDetailView {
         for e in recent {
             let when = df.string(from: e.timestamp)
             let notesShort = clipped(e.notes)
+            let medicationLine = medicationSummary(for: e)
 
             lines.append("""
             - \(when): score \(e.score)/10 (\(e.scale.rawValue)); trend: \(e.trend); duration: \(e.durationMinutes) min;
@@ -688,6 +770,7 @@ private extension SessionDetailView {
               symptoms: \(joinOr(e.symptoms, empty: "none reported"));
               triggers: \(joinOr(e.triggers, empty: "unknown"));
               relievers: \(joinOr(e.relievers, empty: "unknown"));
+              medication: \(medicationLine);
               notes: \(notesShort.isEmpty ? "none" : notesShort).
             """)
         }

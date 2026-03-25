@@ -71,9 +71,31 @@ struct PainPalAssessment {
         var relievers: [String]
     }
 
+    @Generable
+    struct SymptomManagement {
+        var associatedSymptoms: [String]
+        var medicineTaken: Bool?
+        var medicineName: String
+        var medicationInstructions: String
+        var nextMedicationReminderSet: Bool?
+        var hydrationConcern: Bool?
+        var foodIntakeConcern: Bool?
+        var triggersRecorded: [String]
+        var relieversRecorded: [String]
+    }
+
+    @Generable
+    struct HistoryPatterns {
+        var worseningOverTime: Bool?
+        var repeatedSymptoms: [String]
+        var relieverLessEffective: Bool?
+        var notableChanges: [String]
+    }
+
     var child: Child
     var pain: Pain
-    var associatedSymptoms: [String]
+    var symptomManagement: SymptomManagement
+    var historyPatterns: HistoryPatterns
     var redFlagsDetected: [String]
     var dangerLevel: String
     var whyThisLevel: String
