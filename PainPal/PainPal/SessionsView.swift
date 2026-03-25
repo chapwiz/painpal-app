@@ -94,26 +94,6 @@ struct SessionsView: View {
         return letters.joined()
     }
 
-    private struct FloatingPillButtonStyle: ButtonStyle {
-        func makeBody(configuration: Configuration) -> some View {
-            configuration.label
-                .foregroundStyle(.primary)
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay {
-                    Capsule().strokeBorder(.separator, lineWidth: 1)
-                }
-                .shadow(
-                    radius: configuration.isPressed ? 4 : 10,
-                    y: configuration.isPressed ? 2 : 5
-                )
-                .scaleEffect(configuration.isPressed ? 0.96 : 1)
-                .opacity(configuration.isPressed ? 0.98 : 1)
-                .animation(
-                    .interactiveSpring(response: 0.28, dampingFraction: 0.4, blendDuration: 0.25),
-                    value: configuration.isPressed
-                )
-        }
-    }
 
     var body: some View {
         content
@@ -124,26 +104,17 @@ struct SessionsView: View {
     private var content: some View {
         sessionsList
             .listStyle(.insetGrouped)
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic))
-            .safeAreaInset(edge: .bottom) {
-                floatingNewSessionBar
-            }
-            .navigationTitle("Sessions")
+            .navigationTitle("PainPal")
             .toolbar {
                 toolbarContent
+            }
+            .sheet(isPresented: $showingNew) {
+                newSessionSheet
             }
             .onChange(of: isEditing) { _, newValue in
                 if !newValue {
                     selection.removeAll()
                     showSelectionUI = false
-                }
-            }
-            .sheet(isPresented: $showingNew) {
-                newSessionSheet
-            }
-            .sheet(item: $recordingSession) { s in
-                NavigationStack {
-                    RecordEntryView(session: s)
                 }
             }
     }
@@ -155,7 +126,7 @@ struct SessionsView: View {
                 ContentUnavailableView(
                     searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No sessions yet" : "No matches",
                     systemImage: "list.bullet",
-                    description: Text(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Tap New Session to start." : "Try a different name.")
+                    description: Text(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Tap New to start." : "Try a different name.")
                 )
                 .listRowBackground(Color.clear)
             } else {
@@ -283,25 +254,6 @@ struct SessionsView: View {
         }
     }
 
-    private var floatingNewSessionBar: some View {
-        HStack {
-            Button {
-                if !(isEditing || showSelectionUI) { showingNew = true }
-            } label: {
-                Label("New Session", systemImage: "plus")
-                    .font(.headline)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(FloatingPillButtonStyle())
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 10)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 16)
-        .padding(.bottom, 10)
-    }
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
@@ -344,6 +296,13 @@ struct SessionsView: View {
                 }
                 .accessibilityLabel("Delete selected sessions")
             } else {
+                Button {
+                    showingNew = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .accessibilityLabel("New Session")
+
                 Menu {
                     Picker("Sort", selection: $sort) {
                         ForEach(SortOption.allCases) { opt in
@@ -353,6 +312,13 @@ struct SessionsView: View {
                 } label: {
                     Image(systemName: "arrow.up.arrow.down")
                 }
+
+                NavigationLink {
+                    SettingsView()
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .accessibilityLabel("Settings")
             }
         }
     }
@@ -385,6 +351,7 @@ struct SessionsView: View {
                 }
             }
             .navigationTitle("New Session")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { showingNew = false }
