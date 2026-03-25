@@ -112,6 +112,12 @@ import SwiftData
     var triggers: [String] = []
     var relievers: [String] = []
 
+    // Medication / follow-up fields for caregiver notifications
+    var medicineTaken: Bool = false
+    var medicineName: String = ""
+    var nextMedicationReminderDate: Date? = nil
+    var medicationInstructions: String = ""
+
     var session: Session?
 
     init(
@@ -128,6 +134,10 @@ import SwiftData
         symptoms: [String] = [],
         triggers: [String] = [],
         relievers: [String] = [],
+        medicineTaken: Bool = false,
+        medicineName: String = "",
+        nextMedicationReminderDate: Date? = nil,
+        medicationInstructions: String = "",
         session: Session? = nil
     ) {
         self.scale = scale
@@ -144,6 +154,11 @@ import SwiftData
         self.symptoms = symptoms
         self.triggers = triggers
         self.relievers = relievers
+
+        self.medicineTaken = medicineTaken
+        self.medicineName = medicineName
+        self.nextMedicationReminderDate = nextMedicationReminderDate
+        self.medicationInstructions = medicationInstructions
 
         self.session = session
         self.isDeleted = false
