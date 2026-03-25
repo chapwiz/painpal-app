@@ -111,6 +111,11 @@ struct SessionsView: View {
             .sheet(isPresented: $showingNew) {
                 newSessionSheet
             }
+            .sheet(item: $recordingSession) { session in
+                NavigationStack {
+                    RecordEntryView(session: session)
+                }
+            }
             .onChange(of: isEditing) { _, newValue in
                 if !newValue {
                     selection.removeAll()
