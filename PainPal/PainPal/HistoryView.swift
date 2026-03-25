@@ -21,6 +21,11 @@ struct HistoryView: View {
     // SwiftData context used to persist restores / permanent deletes.
     @Environment(\.modelContext) private var ctx
 
+    @State private var showingDeleteSessionConfirmation = false
+    @State private var showingDeleteEntryConfirmation = false
+    @State private var pendingSessionDeletion: Session?
+    @State private var pendingEntryDeletion: PainEntry?
+
     // Fetch sessions that have been soft-deleted. Most recently deleted appears first.
     @Query(
         filter: #Predicate<Session> { $0.isDeleted },
@@ -35,118 +40,80 @@ struct HistoryView: View {
     )
     private var deletedEntries: [PainEntry]
 
-    // Polymorphism with enum
-    // We want to show deleted Sessions and deleted PainEntries in one unified list.
-    // Swift doesn't allow storing different types in the same array without a wrapper,
-    // so we use an enum to "type erase" them into a single `DeletedItem`.
-    private enum DeletedItem: Identifiable {
-        case entry(PainEntry)
-        case session(Session)
-
-        // Stable identifier for SwiftUI's diffing (prefix avoids collisions between types).
-        var id: String {
-            switch self {
-            case .entry(let e):
-                return "entry-\(e.persistentModelID)"
-            case .session(let s):
-                return "session-\(s.persistentModelID)"
-            }
-        }
-
-        // When the item was soft-deleted (used for sorting and display).
-        var deletedAt: Date {
-            switch self {
-            case .entry(let e):
-                return e.deletedAt ?? .distantPast
-            case .session(let s):
-                return s.deletedAt ?? .distantPast
-            }
-        }
-
-        // Primary title shown in the list row.
-        var title: String {
-            switch self {
-            case .entry(let e):
-                return e.session?.childName ?? "Unknown Session"
-            case .session(let s):
-                return s.childName
-            }
-        }
-
-        // Secondary text shown under the title.
-        var subtitle: String {
-            switch self {
-            case .entry(let e):
-                return "Record • \(e.timestamp.formatted(date: .abbreviated, time: .shortened))"
-            case .session:
-                return "Session"
-            }
-        }
-
-        // Human-readable "Deleted ..." string.
-        var deletedAtText: String {
-            "Deleted \(deletedAt.formatted(date: .abbreviated, time: .shortened))"
-        }
-    }
-
-    // Merge deleted entries + sessions into a single array and sort by deletion time.
-    private var deletedItems: [DeletedItem] {
-        let items: [DeletedItem] =
-            deletedEntries.map { .entry($0) } +
-            deletedSessions.map { .session($0) }
-        return items.sorted { $0.deletedAt > $1.deletedAt }
-    }
-
     var body: some View {
         Group {
-            // Empty state when nothing has been soft-deleted yet.
-            if deletedItems.isEmpty {
+            if deletedSessions.isEmpty && deletedEntries.isEmpty {
                 ContentUnavailableView(
                     "Nothing in Recently Deleted",
                     systemImage: "trash",
                     description: Text("Deleted sessions and deleted records will appear here.")
                 )
             } else {
-                // Unified list of deleted items (records + sessions).
                 List {
-                    ForEach(deletedItems) { item in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.title)
-                                .font(.headline)
-                            Text(item.subtitle)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(item.deletedAtText)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .swipeActions(edge: .leading) {
-                            Button {
-                                // Restore = undo soft delete (keeps the object in the database).
-                                switch item {
-                                case .entry(let e):
-                                    e.restore()
-                                case .session(let s):
-                                    s.restore()
+                    if !deletedSessions.isEmpty {
+                        Section("Deleted Sessions") {
+                            ForEach(deletedSessions) { session in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(session.childName)
+                                        .font(.headline)
+                                    Text("Session")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Text("Deleted \(session.deletedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown date")")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
-                                try? ctx.save()
-                            } label: {
-                                Label("Restore", systemImage: "arrow.uturn.backward")
+                                .swipeActions(edge: .leading) {
+                                    Button {
+                                        session.restore()
+                                        try? ctx.save()
+                                    } label: {
+                                        Label("Restore", systemImage: "arrow.uturn.backward")
+                                    }
+                                    .tint(.green)
+                                }
+                                .swipeActions(edge: .trailing) {
+                                    Button(role: .destructive) {
+                                        pendingSessionDeletion = session
+                                        showingDeleteSessionConfirmation = true
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
                             }
-                            .tint(.green)
                         }
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                // Delete = permanent delete from SwiftData store.
-                                switch item {
-                                case .entry(let e):
-                                    ctx.delete(e)
-                                case .session(let s):
-                                    ctx.delete(s)
+                    }
+
+                    if !deletedEntries.isEmpty {
+                        Section("Deleted Records") {
+                            ForEach(deletedEntries) { entry in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Deleted Record")
+                                        .font(.headline)
+                                    Text("Record entry • \(entry.timestamp.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Text("Deleted \(entry.deletedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown date")")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
-                                try? ctx.save()
-                            } label: {
-                                Label("Delete", systemImage: "trash")
+                                .swipeActions(edge: .leading) {
+                                    Button {
+                                        entry.restore()
+                                        try? ctx.save()
+                                    } label: {
+                                        Label("Restore", systemImage: "arrow.uturn.backward")
+                                    }
+                                    .tint(.green)
+                                }
+                                .swipeActions(edge: .trailing) {
+                                    Button(role: .destructive) {
+                                        pendingEntryDeletion = entry
+                                        showingDeleteEntryConfirmation = true
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
                             }
                         }
                     }
@@ -154,5 +121,37 @@ struct HistoryView: View {
             }
         }
         .navigationTitle("Recently Deleted")
+        .alert("Permanently delete session?", isPresented: $showingDeleteSessionConfirmation) {
+            Button("Cancel", role: .cancel) {
+                pendingSessionDeletion = nil
+            }
+            Button("Delete", role: .destructive) {
+                if let session = pendingSessionDeletion {
+                    ctx.delete(session)
+                    try? ctx.save()
+                }
+                pendingSessionDeletion = nil
+            }
+        } message: {
+            Text("This session will be permanently deleted and cannot be restored.")
+        }
+        .alert("Permanently delete record?", isPresented: $showingDeleteEntryConfirmation) {
+            Button("Cancel", role: .cancel) {
+                pendingEntryDeletion = nil
+            }
+            Button("Delete", role: .destructive) {
+                if let entry = pendingEntryDeletion {
+                    ctx.delete(entry)
+                    try? ctx.save()
+                }
+                pendingEntryDeletion = nil
+            }
+        } message: {
+            Text("This record will be permanently deleted and cannot be restored.")
+        }
     }
+}
+
+#Preview {
+    HistoryView()
 }

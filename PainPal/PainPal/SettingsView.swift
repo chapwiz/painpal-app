@@ -11,6 +11,7 @@ import SwiftData
 struct SettingsView: View {
     @Environment(\.modelContext) private var ctx
     @AppStorage("didSeedExampleData") private var didSeedExampleData = false
+    @State private var showingClearAllConfirmation = false
 
     @Query private var allSessions: [Session]
     @Query private var allEntries: [PainEntry]
@@ -65,11 +66,7 @@ struct SettingsView: View {
                 }
 
                 Button("Clear all data", role: .destructive) {
-                    // Delete sessions first (cascade should delete entries)
-                    for s in allSessions { ctx.delete(s) }
-                    // Delete any orphan entries (safety)
-                    for e in allEntries { ctx.delete(e) }
-                    didSeedExampleData = false
+                    showingClearAllConfirmation = true
                 }
             }
 
@@ -81,5 +78,17 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+        .alert("Delete all data?", isPresented: $showingClearAllConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                // Delete sessions first (cascade should delete entries)
+                for s in allSessions { ctx.delete(s) }
+                // Delete any orphan entries (safety)
+                for e in allEntries { ctx.delete(e) }
+                didSeedExampleData = false
+            }
+        } message: {
+            Text("This will permanently delete all sessions and entries in the app. This action cannot be undone.")
+        }
     }
 }
