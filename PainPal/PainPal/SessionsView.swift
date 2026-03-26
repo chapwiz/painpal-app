@@ -110,6 +110,9 @@ struct SessionsView: View {
             }
             .sheet(isPresented: $showingNew) {
                 newSessionSheet
+                    .presentationDetents([.fraction(0.35), .medium])
+                    .presentationDragIndicator(.hidden)
+                    .presentationCornerRadius(58)
             }
             .sheet(item: $recordingSession) { session in
                 NavigationStack {
