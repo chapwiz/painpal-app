@@ -11,6 +11,7 @@ import SwiftData
 struct SettingsView: View {
     @Environment(\.modelContext) private var ctx
     @AppStorage("didSeedExampleData") private var didSeedExampleData = false
+    @AppStorage("userRole") private var userRoleRawValue = UserRole.caregiver.rawValue
     @State private var showingClearAllConfirmation = false
     @AppStorage("debugMedicineOutcomeInterval") private var debugMedicineOutcomeInterval: Double = 5
     @AppStorage("debugHydrationInterval") private var debugHydrationInterval: Double = 6
@@ -20,7 +21,17 @@ struct SettingsView: View {
     @AppStorage("debugMissingMedicationReminderInterval") private var debugMissingMedicationReminderInterval: Double = 10
     @AppStorage("debugMissingRelieverInterval") private var debugMissingRelieverInterval: Double = 11
 
-    private func resetDebugNotificationIntervals() {
+    private func applyDefaultNotificationIntervals() {
+        debugMedicineOutcomeInterval = 45 * 60
+        debugHydrationInterval = 60 * 60
+        debugTriggerLoggingInterval = 45 * 60
+        debugPatternObservationInterval = 60 * 60
+        debugMissingLocationInterval = 45 * 60
+        debugMissingMedicationReminderInterval = 60 * 60
+        debugMissingRelieverInterval = 45 * 60
+    }
+
+    private func applyTestingNotificationIntervals() {
         debugMedicineOutcomeInterval = 5
         debugHydrationInterval = 6
         debugTriggerLoggingInterval = 7
@@ -38,6 +49,11 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("General") {
+                Picker("User role", selection: $userRoleRawValue) {
+                    ForEach(UserRole.allCases) { role in
+                        Text(role.title).tag(role.rawValue)
+                    }
+                }
                 Label("On-device only", systemImage: "lock")
                 Text("No cloud sync in prototype.")
                     .font(.footnote)
@@ -137,13 +153,17 @@ struct SettingsView: View {
                     }
                 }
 
-                Button("Reset demo timings") {
-                    resetDebugNotificationIntervals()
+                Button("Apply default timings") {
+                    applyDefaultNotificationIntervals()
+                }
+
+                Button("Apply testing timings") {
+                    applyTestingNotificationIntervals()
                 }
             } header: {
                 Text("Developer / Demo Notification Timing")
             } footer: {
-                Text("These values control the debug/demo notification delays in seconds.")
+                Text("These values control the debug/demo notification delays in seconds. Use the default preset for realistic timings and the testing preset for quick demos.")
             }
             
             // Delete this before going live, just for testing

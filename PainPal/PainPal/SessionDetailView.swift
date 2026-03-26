@@ -48,10 +48,32 @@ struct SessionDetailView: View {
     // Reactive SwiftData query for this session's non-deleted entries.
     // Using @Query makes the list update immediately when `isDeleted` changes.
     @Query private var entries: [PainEntry]
+    
+    private var fetchedEntries: [PainEntry] {
+        let sid = session.persistentModelID
+
+        let descriptor = FetchDescriptor<PainEntry>(
+            predicate: #Predicate<PainEntry> { entry in
+                !entry.isDeleted
+            },
+            sortBy: [SortDescriptor(\PainEntry.timestamp, order: .reverse)]
+        )
+
+        let allActiveEntries = (try? ctx.fetch(descriptor)) ?? []
+        return allActiveEntries.filter { $0.session?.persistentModelID == sid }
+    }
+
+    private var stableEntries: [PainEntry] {
+        let combined = entries + fetchedEntries
+        var seen = Set<PersistentIdentifier>()
+        return combined
+            .filter { seen.insert($0.persistentModelID).inserted }
+            .sorted { $0.timestamp > $1.timestamp }
+    }
 
 
     // Analysis (prepare prompt input)
-    @State private var analysisCount: Int = 15   // user can choose 10–20
+    @State private var analysisCount: Int = 5   // user can choose 10–20
     @State private var activeAIDestination: AIFlowDestination?
     @State private var preparedCaregiverNote: String = ""
     @State private var showingAIPopover = false
@@ -85,6 +107,95 @@ struct SessionDetailView: View {
                 calendarView
             }
         }
+        .overlay(alignment: .bottomTrailing) {
+            Button {
+                showingAIPopover = true
+            } label: {
+                Image(systemName: "sparkles")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 56, height: 56)
+                    .background(
+                        Circle()
+                            .fill(Color.accentColor)
+                    )
+                    .shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 4)
+            }
+            .padding(.trailing, 20)
+            .padding(.bottom, 20)
+            .accessibilityLabel("AI insights")
+            .popover(isPresented: $showingAIPopover, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("AI insights")
+                        .font(.headline)
+
+                    Text("Choose how many recent records to use.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    Stepper(value: $analysisCount, in: 3...20) {
+                        Text("Using last \(analysisCount) record\(analysisCount == 1 ? "" : "s")")
+                    }
+
+                    Button {
+                        let aiEntries = stableEntries
+                        guard !aiEntries.isEmpty else { return }
+                        activeAIDestination = nil
+                        preparedCaregiverNote = buildCaregiverNote(session: session, entries: aiEntries, lastN: analysisCount)
+                        showingAIPopover = false
+                        DispatchQueue.main.async {
+                            activeAIDestination = .trendSummary
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "chart.line.uptrend.xyaxis")
+                                .foregroundStyle(Color.green.opacity(0.38))
+                            Text("Trend Summary")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color(.secondarySystemBackground))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(stableEntries.isEmpty)
+
+                    Button {
+                        let aiEntries = stableEntries
+                        guard !aiEntries.isEmpty else { return }
+                        activeAIDestination = nil
+                        preparedCaregiverNote = buildCaregiverNote(session: session, entries: aiEntries, lastN: analysisCount)
+                        showingAIPopover = false
+                        DispatchQueue.main.async {
+                            activeAIDestination = .redFlagAssessment
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "cross.case")
+                                .foregroundStyle(Color.green.opacity(0.38))
+                            Text("Red Flag Assessment")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color(.secondarySystemBackground))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(stableEntries.isEmpty)
+                }
+                .padding(16)
+                .frame(width: 300)
+                .presentationCompactAdaptation(.popover)
+            }
+        }
         .navigationTitle(session.childName)
         .headerProminence(.increased)
         .toolbar {
@@ -94,84 +205,18 @@ struct SessionDetailView: View {
                 }
 
                 Button {
-                    showingAIPopover = true
-                } label: {
-                    Image(systemName: "sparkles")
-                }
-                .accessibilityLabel("AI features")
-                .popover(isPresented: $showingAIPopover, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
-                    HStack(alignment: .top, spacing: 14) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("AI summary generation from recent records")
-                                .font(.headline)
-                                .foregroundStyle(.primary)
-                                .fixedSize(horizontal: false, vertical: true)
-
-                            Text("Choose how many records to use.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-
-                            Text("Using last \(analysisCount) records")
-                                .font(.subheadline.weight(.medium))
-
-                            Stepper(value: $analysisCount, in: 10...20) {
-                                EmptyView()
-                            }
-                            .labelsHidden()
-                        }
-
-                        VStack(spacing: 8) {
-                            Button {
-                                preparedCaregiverNote = buildCaregiverNote(session: session, entries: entries, lastN: analysisCount)
-                                showingAIPopover = false
-                                DispatchQueue.main.async {
-                                    activeAIDestination = .caregiverNote
-                                }
-                            } label: {
-                                Text("Prepare caregiver note")
-                                    .font(.footnote.weight(.semibold))
-                                    .multilineTextAlignment(.center)
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-
-                            Button {
-                                preparedCaregiverNote = buildCaregiverNote(session: session, entries: entries, lastN: analysisCount)
-                                showingAIPopover = false
-                                DispatchQueue.main.async {
-                                    activeAIDestination = .trendSummary
-                                }
-                            } label: {
-                                Text("Summarise trend")
-                                    .font(.footnote.weight(.semibold))
-                                    .multilineTextAlignment(.center)
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-
-                            Button {
-                                preparedCaregiverNote = buildCaregiverNote(session: session, entries: entries, lastN: analysisCount)
-                                showingAIPopover = false
-                                DispatchQueue.main.async {
-                                    activeAIDestination = .redFlagAssessment
-                                }
-                            } label: {
-                                Text("Assess red flags / next steps")
-                                    .font(.footnote.weight(.semibold))
-                                    .multilineTextAlignment(.center)
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-                        .frame(width: 150)
+                    let aiEntries = stableEntries
+                    guard !aiEntries.isEmpty else { return }
+                    activeAIDestination = nil
+                    preparedCaregiverNote = buildCaregiverNote(session: session, entries: aiEntries, lastN: analysisCount)
+                    DispatchQueue.main.async {
+                        activeAIDestination = .caregiverNote
                     }
-                    .padding(18)
-                    .frame(width: 420)
-                    .presentationCompactAdaptation(.popover)
+                } label: {
+                    Image(systemName: "doc.text")
                 }
+                .accessibilityLabel("Prepare caregiver note")
+                .disabled(stableEntries.isEmpty)
 
                 Menu {
                     Picker("History View", selection: $historyMode) {
@@ -207,6 +252,7 @@ struct SessionDetailView: View {
                         lastN: analysisCount,
                         note: preparedCaregiverNote
                     )
+                    .id("caregiver-note-\(preparedCaregiverNote)")
                     .presentationDetents([.fraction(0.56), .medium, .large])
                     .presentationDragIndicator(.visible)
                     .presentationCornerRadius(58)
@@ -217,6 +263,7 @@ struct SessionDetailView: View {
                         lastN: analysisCount,
                         note: preparedCaregiverNote
                     )
+                    .id("trend-summary-\(preparedCaregiverNote)")
                     .presentationDetents([.fraction(0.56), .medium, .large])
                     .presentationDragIndicator(.visible)
                     .presentationCornerRadius(58)
@@ -227,6 +274,7 @@ struct SessionDetailView: View {
                         lastN: analysisCount,
                         note: preparedCaregiverNote
                     )
+                    .id("red-flag-\(preparedCaregiverNote)")
                     .presentationDetents([.fraction(0.56), .medium, .large])
                     .presentationDragIndicator(.visible)
                     .presentationCornerRadius(58)
@@ -235,7 +283,7 @@ struct SessionDetailView: View {
         }
         .sheet(item: $selectedEntryForRecording) { target in
             NavigationStack {
-                if let entry = entries.first(where: { $0.persistentModelID == target.id }) {
+                if let entry = stableEntries.first(where: { $0.persistentModelID == target.id }) {
                     RecordEntryView(session: session, editingEntry: entry)
                 } else {
                     ContentUnavailableView("Entry unavailable", systemImage: "exclamationmark.triangle")
@@ -302,7 +350,7 @@ struct SessionDetailView: View {
     }
 
     private var groupedEntriesByDay: [Date: [PainEntry]] {
-        Dictionary(grouping: entries) { e in
+        Dictionary(grouping: stableEntries) { e in
             Calendar.current.startOfDay(for: e.timestamp)
         }
     }
@@ -380,11 +428,11 @@ private extension SessionDetailView {
 
     var detailView: some View {
         List {
-            if entries.isEmpty {
+            if stableEntries.isEmpty {
                 Text("No entries yet. Tap Record to add one.")
                     .foregroundStyle(.secondary)
             } else {
-                let dayGroups = groupEntriesByDay(entries)
+                let dayGroups = groupEntriesByDay(stableEntries)
                 ForEach(dayGroups, id: \.day) { dayGroup in
                     Section {
                         ForEach(dayGroup.entries) { e in
@@ -671,7 +719,7 @@ private extension SessionDetailView {
                                     .accessibilityLabel("Delete entry")
                                 }
 
-                                if e.id != selectedDayEntries.last?.id {
+                                if e.persistentModelID != selectedDayEntries.last?.persistentModelID {
                                     Divider()
                                 }
                             }
@@ -690,7 +738,7 @@ private extension SessionDetailView {
         }
         .onAppear {
             if selectedCalendarDay == nil {
-                selectedCalendarDay = entries.first.map { Calendar.current.startOfDay(for: $0.timestamp) }
+                selectedCalendarDay = stableEntries.first.map { Calendar.current.startOfDay(for: $0.timestamp) }
             }
         }
     }

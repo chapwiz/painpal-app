@@ -11,20 +11,59 @@ import SwiftData
 struct ContentView: View {
     @Environment(\.modelContext) private var ctx
     @AppStorage("didSeedExampleData") private var didSeedExampleData = false
+    @AppStorage("userRole") private var userRoleRawValue = ""
     @State private var selectedTab: RootTab = .sessions
     @State private var searchString = ""
 
     var body: some View {
+        AuthGateView()
+            .task {
+                // Avoid double-seeding when running SwiftUI previews
+                if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" { return }
+
+                // Count all sessions + non-deleted sessions
+                let totalSessions = (try? ctx.fetchCount(FetchDescriptor<Session>())) ?? 0
+                let activeSessions = (try? ctx.fetchCount(FetchDescriptor<Session>(
+                    predicate: #Predicate<Session> { !$0.isDeleted }
+                ))) ?? 0
+
+                // If you already have at least 20 sessions, don’t seed.
+                if totalSessions >= 20 {
+                    didSeedExampleData = true
+                    return
+                }
+
+                // If you already have any active sessions, don’t seed.
+                if activeSessions > 0 {
+                    didSeedExampleData = true
+                    return
+                }
+
+                // Otherwise, seed (covers the case where you only have deleted sessions, or none at all)
+                seedExampleData()
+                didSeedExampleData = true
+            }
+    }
+
+    @ViewBuilder
+    private func mainTabView(for role: UserRole) -> some View {
         TabView(selection: $selectedTab) {
             Tab("Home", systemImage: "house", value: .sessions) {
                 NavigationStack {
-                    SessionsView()
+                    switch role {
+                    case .parent:
+                        ParentHomeView()
+                    case .caregiver:
+                        SessionsView()
+                    }
                 }
             }
 
-            Tab(value: .search, role: .search) {
-                NavigationStack {
-                    SessionSearchView(searchString: $searchString)
+            if role == .caregiver {
+                Tab(value: .search, role: .search) {
+                    NavigationStack {
+                        SessionSearchView(searchString: $searchString)
+                    }
                 }
             }
 
