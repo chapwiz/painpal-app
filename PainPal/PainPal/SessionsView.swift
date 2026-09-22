@@ -12,30 +12,29 @@ struct SessionsView: View {
     @Environment(\.modelContext) private var ctx
     @Query(filter: #Predicate<Session> { !$0.isDeleted }) private var sessions: [Session]
     @Query(filter: #Predicate<PainEntry> { !$0.isDeleted }) private var activePainEntries: [PainEntry]
-    
+
     @State private var showingNew = false
     @State private var childName = ""
-    
+
     // Quick record from Sessions tab
     @State private var recordingSession: Session? = nil
-    
+
     @State private var searchText: String = ""
 
-    @Environment(\.editMode) private var editMode
+    @State private var isEditing: Bool = false
     @State private var selection = Set<PersistentIdentifier>()
+    // Animates the appearance/disappearance of the selection UI (checkmarks + tap catcher)
+    // without asking the whole List to animate (which causes ghosting).
+    @State private var showSelectionUI: Bool = false
 
-    private var isEditing: Bool {
-        editMode?.wrappedValue.isEditing ?? false
-    }
-    
     enum SortOption: String, CaseIterable, Identifiable {
         case newest
         case oldest
         case mostEntries
         case leastEntries
-        
+
         var id: String { rawValue }
-        
+
         var title: String {
             switch self {
             case .newest: return "Newest"
@@ -45,9 +44,9 @@ struct SessionsView: View {
             }
         }
     }
-    
+
     @State private var sort: SortOption = .newest
-    
+
     private var displayedSessions: [Session] {
         let base = sessions.sorted {
             switch sort {
@@ -67,12 +66,12 @@ struct SessionsView: View {
                 return $0.createdAt > $1.createdAt
             }
         }
-        
+
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return base }
         return base.filter { $0.childName.localizedCaseInsensitiveContains(q) }
     }
-    
+
     private var activeEntryCountBySessionID: [PersistentIdentifier: Int] {
         var dict: [PersistentIdentifier: Int] = [:]
         for e in activePainEntries {
@@ -86,13 +85,13 @@ struct SessionsView: View {
     private func activeEntryCount(for session: Session) -> Int {
         activeEntryCountBySessionID[session.persistentModelID] ?? 0
     }
-    
+
     private func initials(for name: String) -> String {
         let parts = name.split(whereSeparator: { $0 == " " || $0 == "-" })
         let letters = parts.prefix(2).compactMap { $0.first }.map { String($0).uppercased() }
         return letters.joined()
     }
-    
+
     private struct FloatingPillButtonStyle: ButtonStyle {
         func makeBody(configuration: Configuration) -> some View {
             configuration.label
@@ -113,11 +112,11 @@ struct SessionsView: View {
                 )
         }
     }
-    
+
     var body: some View {
         content
     }
-    
+
     // MARK: - View Composition
 
     private var content: some View {
@@ -132,7 +131,10 @@ struct SessionsView: View {
                 toolbarContent
             }
             .onChange(of: isEditing) { _, newValue in
-                if !newValue { selection.removeAll() }
+                if !newValue {
+                    selection.removeAll()
+                    showSelectionUI = false
+                }
             }
             .sheet(isPresented: $showingNew) {
                 newSessionSheet
@@ -146,7 +148,7 @@ struct SessionsView: View {
 
     @ViewBuilder
     private var sessionsList: some View {
-        List(selection: $selection) {
+        List {
             if displayedSessions.isEmpty {
                 ContentUnavailableView(
                     searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No sessions yet" : "No matches",
@@ -157,68 +159,124 @@ struct SessionsView: View {
             } else {
                 ForEach(displayedSessions) { s in
                     sessionRow(s)
-                        .tag(s.persistentModelID)
                 }
+                // Only allow built-in swipe-to-delete outside our custom edit mode.
                 .onDelete { indexSet in
+                    guard !isEditing else { return }
                     for i in indexSet {
                         displayedSessions[i].softDelete()
                     }
                 }
+                .deleteDisabled(isEditing)
             }
         }
+        // Avoid animating the entire List when toggling edit mode (prevents ghosting).
+        // We animate the checkmark control explicitly inside the row instead.
+        .animation(.easeInOut(duration: 0.18), value: showSelectionUI)
+        .animation(.snappy, value: selection)
     }
 
     @ViewBuilder
     private func sessionRow(_ s: Session) -> some View {
+        let sid = s.persistentModelID
+        let isSelected = selection.contains(sid)
+
+        // Shared row content so the list row identity stays stable across mode changes.
+        let rowContent = HStack(spacing: 12) {
+            if showSelectionUI {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .transition(.scale.combined(with: .opacity))
+                    .animation(.snappy, value: isSelected)
+            }
+
+            ZStack {
+                Circle()
+                    .fill(.thinMaterial)
+                    .frame(width: 40, height: 40)
+                Text(initials(for: s.childName))
+                    .font(.caption)
+                    .fontWeight(.semibold)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(s.childName)
+                    .font(.headline)
+
+                Text(s.createdAt.formatted(date: .abbreviated, time: .omitted))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            let count = activeEntryCount(for: s)
+            Text("\(count)")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.thinMaterial)
+                .clipShape(Capsule())
+                .accessibilityLabel("\(count) entr\(count == 1 ? "y" : "ies")")
+        }
+        .padding(.vertical, 4)
+
         NavigationLink {
             SessionDetailView(session: s)
         } label: {
-            HStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(.thinMaterial)
-                        .frame(width: 40, height: 40)
-                    Text(initials(for: s.childName))
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(s.childName)
-                        .font(.headline)
-
-                    Text(s.createdAt.formatted(date: .abbreviated, time: .omitted))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                let count = activeEntryCount(for: s)
-                Text("\(count)")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(.thinMaterial)
-                    .clipShape(Capsule())
-                    .accessibilityLabel("\(count) entr\(count == 1 ? "y" : "ies")")
-            }
-            .padding(.vertical, 4)
+            rowContent
         }
-        .swipeActions(edge: .leading) {
-            Button {
-                recordingSession = s
-            } label: {
-                Label("Record", systemImage: "plus")
+        .buttonStyle(.plain)
+        // Allow normal navigation taps when not editing; when editing, the overlay captures taps.
+        .allowsHitTesting(!(isEditing || showSelectionUI))
+        // When editing, capture taps for selection without competing with NavigationLink.
+        .overlay {
+            if showSelectionUI {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if isSelected {
+                            selection.remove(sid)
+                        } else {
+                            selection.insert(sid)
+                        }
+                    }
             }
-            .tint(.blue)
+        }
+        .contentShape(Rectangle())
+        // Long press should not block normal taps; use simultaneous gesture.
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.35)
+                .onEnded { _ in
+                    // Press-and-hold enters edit mode and selects the pressed session.
+                    guard !isEditing && !showSelectionUI else { return }
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        isEditing = true
+                        showSelectionUI = true
+                    }
+                    selection = [sid]
+                }
+        )
+        // Only show swipe actions when not editing.
+        .swipeActions(edge: .leading) {
+            if !isEditing {
+                Button {
+                    recordingSession = s
+                } label: {
+                    Label("Record", systemImage: "plus")
+                }
+                .tint(.blue)
+            }
         }
         .swipeActions(edge: .trailing) {
-            Button(role: .destructive) {
-                s.softDelete()
-            } label: {
-                Label("Delete", systemImage: "trash")
+            if !isEditing {
+                Button(role: .destructive) {
+                    s.softDelete()
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
             }
         }
     }
@@ -226,7 +284,7 @@ struct SessionsView: View {
     private var floatingNewSessionBar: some View {
         HStack {
             Button {
-                showingNew = true
+                if !(isEditing || showSelectionUI) { showingNew = true }
             } label: {
                 Label("New Session", systemImage: "plus")
                     .font(.headline)
@@ -246,7 +304,16 @@ struct SessionsView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
-            EditButton()
+            if isEditing {
+                Button("Done") {
+                    // Animate selection UI out, then exit edit mode.
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showSelectionUI = false
+                        isEditing = false
+                    }
+                    selection.removeAll()
+                }
+            }
         }
 
         ToolbarItemGroup(placement: .topBarTrailing) {
@@ -260,11 +327,16 @@ struct SessionsView: View {
                 }
 
                 Button(role: .destructive) {
-                    let selectedIDs = selection
-                    for s in sessions where selectedIDs.contains(s.persistentModelID) {
-                        s.softDelete()
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        let selectedIDs = selection
+                        for s in sessions where selectedIDs.contains(s.persistentModelID) {
+                            s.softDelete()
+                        }
+                        selection.removeAll()
+                        showSelectionUI = false
+                        isEditing = false
                     }
-                    selection.removeAll()
+                    try? ctx.save()
                 } label: {
                     Image(systemName: "trash")
                 }
@@ -307,4 +379,21 @@ struct SessionsView: View {
             }
         }
     }
+}
+
+#Preview("SessionsView — In-Memory") {
+    // In-memory SwiftData container for previews (does not persist).
+    let config = ModelConfiguration(isStoredInMemoryOnly: true)
+    let container = try! ModelContainer(for: Session.self, PainEntry.self, configurations: config)
+
+    // Seed a few sessions so the list renders immediately.
+    let ctx = container.mainContext
+    ctx.insert(Session(childName: "Amy Chan"))
+    ctx.insert(Session(childName: "Ben Wong"))
+    ctx.insert(Session(childName: "Chloe Lee"))
+
+    return NavigationStack {
+        SessionsView()
+    }
+    .modelContainer(container)
 }
