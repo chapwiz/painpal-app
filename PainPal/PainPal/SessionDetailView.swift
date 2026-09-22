@@ -8,6 +8,33 @@
 import SwiftUI
 import SwiftData
 
+private enum HistoryMode: String, CaseIterable, Identifiable {
+    case detail = "Detail"
+    case calendar = "Calendar"
+
+    var id: String { rawValue }
+
+    var iconName: String {
+        switch self {
+        case .detail: return "list.bullet"
+        case .calendar: return "calendar"
+        }
+    }
+}
+
+
+private enum AIFlowDestination: String, Identifiable {
+    case caregiverNote
+    case trendSummary
+    case redFlagAssessment
+
+    var id: String { rawValue }
+}
+
+private struct SelectedEntryTarget: Identifiable, Equatable {
+    let id: PersistentIdentifier
+}
+
 // Displays a single child session and its pain records (timeline).
 //
 // Key idea: we soft-delete PainEntry records by toggling `isDeleted` so they can be restored
@@ -21,29 +48,248 @@ struct SessionDetailView: View {
     // Reactive SwiftData query for this session's non-deleted entries.
     // Using @Query makes the list update immediately when `isDeleted` changes.
     @Query private var entries: [PainEntry]
+    
+    private var fetchedEntries: [PainEntry] {
+        let sid = session.persistentModelID
 
-    // Controls presentation of the RecordEntryView sheet.
-    @State private var showingRecord = false
-    // Controls presentation of the edit sheet for an existing entry.
-    @State private var editingEntry: PainEntry? = nil
+        let descriptor = FetchDescriptor<PainEntry>(
+            predicate: #Predicate<PainEntry> { entry in
+                !entry.isDeleted
+            },
+            sortBy: [SortDescriptor(\PainEntry.timestamp, order: .reverse)]
+        )
+
+        let allActiveEntries = (try? ctx.fetch(descriptor)) ?? []
+        return allActiveEntries.filter { $0.session?.persistentModelID == sid }
+    }
+
+    private var stableEntries: [PainEntry] {
+        let combined = entries + fetchedEntries
+        var seen = Set<PersistentIdentifier>()
+        return combined
+            .filter { seen.insert($0.persistentModelID).inserted }
+            .sorted { $0.timestamp > $1.timestamp }
+    }
+
 
     // Analysis (prepare prompt input)
-    @State private var analysisCount: Int = 15   // user can choose 10–20
-    @State private var showingAnalysis = false
+    @State private var analysisCount: Int = 5   // user can choose 10–20
+    @State private var activeAIDestination: AIFlowDestination?
     @State private var preparedCaregiverNote: String = ""
+    @State private var showingAIPopover = false
+    @State private var historyMode: HistoryMode = .calendar
+    @State private var calendarMonth = Calendar.current.startOfMonth(for: Date())
+    @State private var selectedCalendarDay: Date?
+    @State private var calendarTransitionDirection: Int = 0
+    @State private var calendarAnimationToken = UUID()
+    @State private var selectedEntryForRecording: SelectedEntryTarget?
+
+    
+    // Keep the record destination stable so SwiftUI does not recreate it on every body update.
+    private let recordEntryView: RecordEntryView
 
     init(session: Session) {
         self.session = session
-        // Capture the session's persistent identifier for use inside the SwiftData predicate.
-        // Predicates are expression-based, so comparing by persistentModelID is safer than
-        // capturing the Session model object directly.
         let sid = session.persistentModelID
-        // Fetch only entries that belong to this session AND are not soft-deleted.
         _entries = Query(
             filter: #Predicate<PainEntry> { $0.session?.persistentModelID == sid && !$0.isDeleted },
             sort: \PainEntry.timestamp,
             order: .reverse
         )
+        self.recordEntryView = RecordEntryView(session: session)
+    }
+
+    var body: some View {
+        Group {
+            if historyMode == .detail {
+                detailView
+            } else {
+                calendarView
+            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            Button {
+                showingAIPopover = true
+            } label: {
+                Image(systemName: "sparkles")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 56, height: 56)
+                    .background(
+                        Circle()
+                            .fill(Color.accentColor)
+                    )
+                    .shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 4)
+            }
+            .padding(.trailing, 20)
+            .padding(.bottom, 20)
+            .accessibilityLabel("AI insights")
+            .popover(isPresented: $showingAIPopover, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("AI insights")
+                        .font(.headline)
+
+                    Text("Choose how many recent records to use.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    Stepper(value: $analysisCount, in: 3...20) {
+                        Text("Using last \(analysisCount) record\(analysisCount == 1 ? "" : "s")")
+                    }
+
+                    Button {
+                        let aiEntries = stableEntries
+                        guard !aiEntries.isEmpty else { return }
+                        activeAIDestination = nil
+                        preparedCaregiverNote = buildCaregiverNote(session: session, entries: aiEntries, lastN: analysisCount)
+                        showingAIPopover = false
+                        DispatchQueue.main.async {
+                            activeAIDestination = .trendSummary
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "chart.line.uptrend.xyaxis")
+                                .foregroundStyle(Color.green.opacity(0.38))
+                            Text("Trend Summary")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color(.secondarySystemBackground))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(stableEntries.isEmpty)
+
+                    Button {
+                        let aiEntries = stableEntries
+                        guard !aiEntries.isEmpty else { return }
+                        activeAIDestination = nil
+                        preparedCaregiverNote = buildCaregiverNote(session: session, entries: aiEntries, lastN: analysisCount)
+                        showingAIPopover = false
+                        DispatchQueue.main.async {
+                            activeAIDestination = .redFlagAssessment
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "cross.case")
+                                .foregroundStyle(Color.green.opacity(0.38))
+                            Text("Red Flag Assessment")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color(.secondarySystemBackground))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(stableEntries.isEmpty)
+                }
+                .padding(16)
+                .frame(width: 300)
+                .presentationCompactAdaptation(.popover)
+            }
+        }
+        .navigationTitle(session.childName)
+        .headerProminence(.increased)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                NavigationLink(destination: recordEntryView) {
+                    Image(systemName: "plus")
+                }
+
+                Button {
+                    let aiEntries = stableEntries
+                    guard !aiEntries.isEmpty else { return }
+                    activeAIDestination = nil
+                    preparedCaregiverNote = buildCaregiverNote(session: session, entries: aiEntries, lastN: analysisCount)
+                    DispatchQueue.main.async {
+                        activeAIDestination = .caregiverNote
+                    }
+                } label: {
+                    Image(systemName: "doc.text")
+                }
+                .accessibilityLabel("Prepare caregiver note")
+                .disabled(stableEntries.isEmpty)
+
+                Menu {
+                    Picker("History View", selection: $historyMode) {
+                        ForEach(HistoryMode.allCases) { mode in
+                            Label(mode.rawValue, systemImage: mode.iconName)
+                                .tag(mode)
+                        }
+                    }
+
+                    Divider()
+
+#if DEBUG
+                    Divider()
+                    Button {
+                        seedDemoEthanWongIfNeeded()
+                    } label: {
+                        Label("Insert demo child (Ethan Wong)", systemImage: "tray.and.arrow.down")
+                    }
+#endif
+                } label: {
+                    Image(systemName: historyMode.iconName)
+                }
+                .accessibilityLabel("View options")
+            }
+        }
+        .sheet(item: $activeAIDestination) { destination in
+            NavigationStack {
+                switch destination {
+                case .caregiverNote:
+                    PreparedCaregiverNoteView(
+                        childName: session.childName,
+                        ageDisplay: computedAgeString,
+                        lastN: analysisCount,
+                        note: preparedCaregiverNote
+                    )
+                    .id("caregiver-note-\(preparedCaregiverNote)")
+                    .presentationDetents([.fraction(0.56), .medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationCornerRadius(58)
+                case .trendSummary:
+                    TrendSummaryResultView(
+                        childName: session.childName,
+                        ageDisplay: computedAgeString,
+                        lastN: analysisCount,
+                        note: preparedCaregiverNote
+                    )
+                    .id("trend-summary-\(preparedCaregiverNote)")
+                    .presentationDetents([.fraction(0.56), .medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationCornerRadius(58)
+                case .redFlagAssessment:
+                    RedFlagAssessmentView(
+                        childName: session.childName,
+                        ageDisplay: computedAgeString,
+                        lastN: analysisCount,
+                        note: preparedCaregiverNote
+                    )
+                    .id("red-flag-\(preparedCaregiverNote)")
+                    .presentationDetents([.fraction(0.56), .medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationCornerRadius(58)
+                }
+            }
+        }
+        .sheet(item: $selectedEntryForRecording) { target in
+            NavigationStack {
+                if let entry = stableEntries.first(where: { $0.persistentModelID == target.id }) {
+                    RecordEntryView(session: session, editingEntry: entry)
+                } else {
+                    ContentUnavailableView("Entry unavailable", systemImage: "exclamationmark.triangle")
+                }
+            }
+        }
     }
 
     private func groupEntriesByDay(_ entries: [PainEntry]) -> [(day: Date, entries: [PainEntry])] {
@@ -64,104 +310,227 @@ struct SessionDetailView: View {
         return Session.ageString(for: dob)
     }
 
-    var body: some View {
+    private func displayText(for rawLocation: String) -> String {
+        PainLocation.allCases.first(where: { $0.rawValue == rawLocation })?.displayName ?? rawLocation
+    }
+
+    private func delete(_ entry: PainEntry) {
+        entry.softDelete()
+        try? ctx.save()
+    }
+
+    private func shiftCalendarMonth(by offset: Int) {
+        guard let newMonth = Calendar.current.date(byAdding: .month, value: offset, to: calendarMonth) else { return }
+        calendarTransitionDirection = offset >= 0 ? 1 : -1
+        withAnimation(.easeInOut(duration: 0.26)) {
+            calendarMonth = Calendar.current.startOfMonth(for: newMonth)
+            calendarAnimationToken = UUID()
+        }
+    }
+
+    private func updateCalendarMonth(month: Int? = nil, year: Int? = nil) {
+        let calendar = Calendar.current
+        var components = calendar.dateComponents([.year, .month], from: calendarMonth)
+        if let month { components.month = month }
+        if let year { components.year = year }
+        guard let newDate = calendar.date(from: components) else { return }
+
+        let newStart = calendar.startOfMonth(for: newDate)
+        let currentComponents = calendar.dateComponents([.year, .month], from: calendarMonth)
+        let newComponents = calendar.dateComponents([.year, .month], from: newStart)
+
+        let currentIndex = (currentComponents.year ?? 0) * 12 + (currentComponents.month ?? 0)
+        let newIndex = (newComponents.year ?? 0) * 12 + (newComponents.month ?? 0)
+        calendarTransitionDirection = newIndex >= currentIndex ? 1 : -1
+
+        withAnimation(.easeInOut(duration: 0.26)) {
+            calendarMonth = newStart
+            calendarAnimationToken = UUID()
+        }
+    }
+
+    private var groupedEntriesByDay: [Date: [PainEntry]] {
+        Dictionary(grouping: stableEntries) { e in
+            Calendar.current.startOfDay(for: e.timestamp)
+        }
+    }
+
+    private var selectedDayEntries: [PainEntry] {
+        guard let selectedCalendarDay else { return [] }
+        let day = Calendar.current.startOfDay(for: selectedCalendarDay)
+        return (groupedEntriesByDay[day] ?? []).sorted { $0.timestamp > $1.timestamp }
+    }
+
+    private var currentMonthTitle: String {
+        calendarMonth.formatted(.dateTime.month(.wide).year())
+    }
+
+    private var monthDays: [Date?] {
+        let calendar = Calendar.current
+        let start = calendar.startOfMonth(for: calendarMonth)
+        guard let dayRange = calendar.range(of: .day, in: .month, for: start) else { return [] }
+
+        let weekdayOfFirst = calendar.component(.weekday, from: start)
+        let leadingEmpty = (weekdayOfFirst - calendar.firstWeekday + 7) % 7
+
+        var result: [Date?] = Array(repeating: nil, count: leadingEmpty)
+        for day in dayRange {
+            if let date = calendar.date(byAdding: .day, value: day - 1, to: start) {
+                result.append(date)
+            }
+        }
+        while result.count % 7 != 0 {
+            result.append(nil)
+        }
+        return result
+    }
+
+    private func entries(for day: Date) -> [PainEntry] {
+        let key = Calendar.current.startOfDay(for: day)
+        return (groupedEntriesByDay[key] ?? []).sorted { $0.timestamp > $1.timestamp }
+    }
+
+    private func maxScore(for day: Date) -> Int? {
+        entries(for: day).map(\.score).max()
+    }
+
+    private func tintOpacity(for day: Date) -> Double {
+        guard let maxScore = maxScore(for: day) else { return 0 }
+        return 0.14 + (Double(maxScore) / 10.0) * 0.36
+    }
+
+}
+
+private extension SessionDetailView {
+    func medicationDisplayLines(for entry: PainEntry) -> [String] {
+        guard entry.medicineTaken else { return [] }
+
+        var lines: [String] = []
+        let trimmedName = entry.medicineName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedInstructions = entry.medicationInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmedName.isEmpty {
+            lines.append("Medicine: taken")
+        } else {
+            lines.append("Medicine: \(trimmedName)")
+        }
+
+        if !trimmedInstructions.isEmpty {
+            lines.append("Instructions: \(trimmedInstructions)")
+        }
+
+        if let reminderDate = entry.nextMedicationReminderDate {
+            lines.append("Medication reminder: \(reminderDate.formatted(date: .abbreviated, time: .shortened))")
+        }
+
+        return lines
+    }
+
+    var detailView: some View {
         List {
-            if entries.isEmpty {
+            if stableEntries.isEmpty {
                 Text("No entries yet. Tap Record to add one.")
                     .foregroundStyle(.secondary)
             } else {
-                let dayGroups = groupEntriesByDay(entries)
+                let dayGroups = groupEntriesByDay(stableEntries)
                 ForEach(dayGroups, id: \.day) { dayGroup in
                     Section {
                         ForEach(dayGroup.entries) { e in
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text("\(e.scale.rawValue) • \(e.score)/10")
-                                        .font(.headline)
+                            Button {
+                                selectedEntryForRecording = SelectedEntryTarget(id: e.persistentModelID)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Text("\(e.scale.rawValue) • \(e.score)/10")
+                                            .font(.headline)
 
-                                    Spacer()
+                                        Spacer()
 
-                                    Button {
-                                        editingEntry = e
-                                    } label: {
-                                        Image(systemName: "pencil")
+                                        Text(e.timestamp, style: .time)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
                                     }
-                                    .buttonStyle(.borderless)
-                                    .foregroundStyle(.secondary)
-                                    .accessibilityLabel("Edit entry")
 
-                                    Text(e.timestamp, style: .time)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                HStack(spacing: 10) {
-                                    if e.durationMinutes > 0 {
-                                        let h = e.durationMinutes / 60
-                                        let m = e.durationMinutes % 60
-                                        if h > 0 {
-                                            Text(m > 0 ? "Duration: \(h)h \(m)m" : "Duration: \(h)h")
-                                        } else {
-                                            Text("Duration: \(m)m")
+                                    HStack(spacing: 10) {
+                                        if e.durationMinutes > 0 {
+                                            let h = e.durationMinutes / 60
+                                            let m = e.durationMinutes % 60
+                                            if h > 0 {
+                                                Text(m > 0 ? "Duration: \(h)h \(m)m" : "Duration: \(h)h")
+                                            } else {
+                                                Text("Duration: \(m)m")
+                                            }
                                         }
                                     }
-                                }
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
 
-                                if !e.locations.isEmpty {
-                                    Text("Areas: \(e.locations.joined(separator: ", "))")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
+                                    if !e.locations.isEmpty {
+                                        Text("Areas: \(e.locations.map(displayText).joined(separator: ", "))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
 
-                                if !e.qualityWords.isEmpty {
-                                    Text("Quality: \(e.qualityWords.joined(separator: ", "))")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
+                                    if !e.qualityWords.isEmpty {
+                                        Text("Quality: \(e.qualityWords.joined(separator: ", "))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
 
-                                if !e.symptoms.isEmpty {
-                                    Text("Symptoms: \(e.symptoms.joined(separator: ", "))")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
+                                    if !e.symptoms.isEmpty {
+                                        Text("Symptoms: \(e.symptoms.joined(separator: ", "))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
 
-                                if !e.triggers.isEmpty {
-                                    Text("Triggers: \(e.triggers.joined(separator: ", "))")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
+                                    if !e.triggers.isEmpty {
+                                        Text("Triggers: \(e.triggers.joined(separator: ", "))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
 
-                                if !e.relievers.isEmpty {
-                                    Text("Relievers: \(e.relievers.joined(separator: ", "))")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
+                                    if !e.relievers.isEmpty {
+                                        Text("Relievers: \(e.relievers.joined(separator: ", "))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
 
-                                if !e.notes.isEmpty {
-                                    Text(e.notes)
-                                }
+                                    ForEach(medicationDisplayLines(for: e), id: \.self) { line in
+                                        Text(line)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
 
-                                if let t = e.transcript, !t.isEmpty {
-                                    Text("Transcript: \(t)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
+                                    if !e.notes.isEmpty {
+                                        Text(e.notes)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
 
-                                if let summary = e.aiSummary, !summary.isEmpty {
-                                    Text("Summary: \(summary)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                    if let t = e.transcript, !t.isEmpty {
+                                        Text("Transcript: \(t)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    if let summary = e.aiSummary, !summary.isEmpty {
+                                        Text("Summary: \(summary)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.plain)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    delete(e)
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .opacity(0.28)
                                 }
                             }
-                            .padding(.vertical, 4)
-                        }
-                        .onDelete { idx in
-                            for i in idx {
-                                dayGroup.entries[i].softDelete()
-                            }
-                            try? ctx.save()
                         }
                     } header: {
                         Text(dayGroup.day.formatted(date: .abbreviated, time: .omitted))
@@ -169,61 +538,217 @@ struct SessionDetailView: View {
                 }
             }
         }
-        .navigationTitle(session.childName)
-        .headerProminence(.increased)
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button("Record") { showingRecord = true }
+    }
 
-                Menu {
-                    Stepper("Use last \(analysisCount) records", value: $analysisCount, in: 10...20)
+    var calendarView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                ZStack {
+                    VStack(spacing: 12) {
+                        HStack {
+                            Button {
+                                if let previous = Calendar.current.date(byAdding: .month, value: -1, to: calendarMonth) {
+                                    calendarMonth = Calendar.current.startOfMonth(for: previous)
+                                }
+                            } label: {
+                                Image(systemName: "chevron.left")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(Color.green)
+                            }
+                            .buttonStyle(.plain)
 
-                    Button {
-                        preparedCaregiverNote = buildCaregiverNote(session: session, entries: entries, lastN: analysisCount)
-                        showingAnalysis = true
-                    } label: {
-                        Label("Prepare caregiver note", systemImage: "sparkles")
+                            Spacer()
+
+                            Text(currentMonthTitle)
+                                .font(.headline)
+
+                            Spacer()
+
+                            Button {
+                                if let next = Calendar.current.date(byAdding: .month, value: 1, to: calendarMonth) {
+                                    calendarMonth = Calendar.current.startOfMonth(for: next)
+                                }
+                            } label: {
+                                Image(systemName: "chevron.right")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(Color.green)
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        let weekdaySymbols = Calendar.current.shortStandaloneWeekdaySymbols
+                        let orderedWeekdays = Array(weekdaySymbols.dropFirst(Calendar.current.firstWeekday - 1) + weekdaySymbols.prefix(Calendar.current.firstWeekday - 1))
+
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 7), spacing: 8) {
+                            ForEach(orderedWeekdays, id: \.self) { symbol in
+                                Text(symbol)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity)
+                            }
+
+                            ForEach(Array(monthDays.enumerated()), id: \.offset) { _, date in
+                                if let date {
+                                    let dayEntries = entries(for: date)
+                                    let isSelected = selectedCalendarDay.map { Calendar.current.isDate($0, inSameDayAs: date) } ?? false
+                                    let maxScore = maxScore(for: date)
+
+                                    Button {
+                                        selectedCalendarDay = date
+                                    } label: {
+                                        VStack(spacing: 4) {
+                                            Text("\(Calendar.current.component(.day, from: date))")
+                                                .font(.subheadline.weight(isSelected ? .bold : .regular))
+                                                .foregroundStyle(Color.primary)
+
+                                            if let maxScore {
+                                                Text("\(maxScore)/10")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(Color.secondary)
+                                            } else {
+                                                Circle()
+                                                    .fill(Color.clear)
+                                                    .frame(width: 4, height: 4)
+                                            }
+                                        }
+                                        .frame(maxWidth: .infinity, minHeight: 48)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 10)
+                                                .fill(
+                                                    isSelected
+                                                    ? Color.green.opacity(0.38)
+                                                    : (dayEntries.isEmpty ? Color.gray.opacity(0.08) : Color.green.opacity(0.18))
+                                                )
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                } else {
+                                    Color.clear
+                                        .frame(height: 60)
+                                }
+                            }
+                        }
                     }
-
-#if DEBUG
-                    Divider()
-                    Button {
-                        seedDemoEthanWongIfNeeded()
-                    } label: {
-                        Label("Insert demo child (Ethan Wong)", systemImage: "tray.and.arrow.down")
-                    }
-#endif
-                } label: {
-                    Image(systemName: "wand.and.stars")
+                    .id(calendarAnimationToken)
+                    .transition(
+                        .asymmetric(
+                            insertion: .move(edge: calendarTransitionDirection >= 0 ? .trailing : .leading).combined(with: .opacity),
+                            removal: .move(edge: calendarTransitionDirection >= 0 ? .leading : .trailing).combined(with: .opacity)
+                        )
+                    )
                 }
-                .accessibilityLabel("Analyse")
-            }
-        }
-        .sheet(isPresented: $showingRecord) {
-            NavigationStack {
-                // RecordEntryView writes a new PainEntry linked to this session.
-                RecordEntryView(session: session)
-            }
-        }
-        .sheet(item: $editingEntry) { entry in
-            NavigationStack {
-                RecordEntryView(session: session, editingEntry: entry)
-            }
-        }
-        .sheet(isPresented: $showingAnalysis) {
-            NavigationStack {
-                PreparedNoteView(
-                    childName: session.childName,
-                    ageDisplay: computedAgeString,
-                    lastN: analysisCount,
-                    note: preparedCaregiverNote
+                .frame(minHeight: 360)
+                .padding()
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color(.secondarySystemBackground))
                 )
+                .contentShape(RoundedRectangle(cornerRadius: 16))
+                .gesture(
+                    DragGesture(minimumDistance: 20)
+                        .onEnded { value in
+                            let horizontal = value.translation.width
+                            let vertical = value.translation.height
+                            guard abs(horizontal) > abs(vertical), abs(horizontal) > 30 else { return }
+                            if horizontal < 0 {
+                                shiftCalendarMonth(by: 1)
+                            } else {
+                                shiftCalendarMonth(by: -1)
+                            }
+                        }
+                )
+
+                Text("Days with entries show the highest pain score recorded that day.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                if let selectedCalendarDay {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(selectedCalendarDay.formatted(date: .complete, time: .omitted))
+                            .font(.headline)
+
+                        if selectedDayEntries.isEmpty {
+                            Text("No entries for this day.")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(selectedDayEntries) { e in
+                                HStack(alignment: .top, spacing: 12) {
+                                    Button {
+                                        selectedEntryForRecording = SelectedEntryTarget(id: e.persistentModelID)
+                                    } label: {
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            HStack {
+                                                Text("\(e.scale.rawValue) • \(e.score)/10")
+                                                    .font(.headline)
+                                                Spacer()
+                                                Text(e.timestamp, style: .time)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+
+                                            if !e.locations.isEmpty {
+                                                Text("Areas: \(e.locations.map(displayText).joined(separator: ", "))")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+
+                                            ForEach(medicationDisplayLines(for: e), id: \.self) { line in
+                                                Text(line)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+
+                                            if !e.notes.isEmpty {
+                                                Text(e.notes)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                        }
+                                        .padding(.vertical, 4)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    Button(role: .destructive) {
+                                        delete(e)
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .opacity(0.28)
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .accessibilityLabel("Delete entry")
+                                }
+
+                                if e.persistentModelID != selectedDayEntries.last?.persistentModelID {
+                                    Divider()
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(Color(.secondarySystemBackground))
+                    )
+                }
+            }
+            // animation removed to reduce jumpiness of footer and entries when swiping months
+            .padding()
+        }
+        .onAppear {
+            if selectedCalendarDay == nil {
+                selectedCalendarDay = stableEntries.first.map { Calendar.current.startOfDay(for: $0.timestamp) }
             }
         }
     }
 }
 
 private extension SessionDetailView {
+    private func startOfMonth(for date: Date) -> Date {
+        Calendar.current.startOfMonth(for: date)
+    }
+
     func buildCaregiverNote(session: Session, entries: [PainEntry], lastN: Int) -> String {
         let recent = entries
             .filter { !$0.isDeleted }
@@ -243,6 +768,30 @@ private extension SessionDetailView {
             return t.isEmpty ? "" : String(t.prefix(limit))
         }
 
+        func medicationSummary(for entry: PainEntry) -> String {
+            guard entry.medicineTaken else { return "none recorded" }
+
+            var parts: [String] = []
+
+            let trimmedName = entry.medicineName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedName.isEmpty {
+                parts.append("taken")
+            } else {
+                parts.append(trimmedName)
+            }
+
+            let trimmedInstructions = entry.medicationInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedInstructions.isEmpty {
+                parts.append("instructions: \(trimmedInstructions)")
+            }
+
+            if let reminderDate = entry.nextMedicationReminderDate {
+                parts.append("next reminder: \(df.string(from: reminderDate))")
+            }
+
+            return parts.joined(separator: "; ")
+        }
+
         let scores = recent.map(\.score)
         let scoreLine: String = {
             guard let latest = scores.first else { return "No recorded entries yet." }
@@ -260,6 +809,7 @@ private extension SessionDetailView {
         for e in recent {
             let when = df.string(from: e.timestamp)
             let notesShort = clipped(e.notes)
+            let medicationLine = medicationSummary(for: e)
 
             lines.append("""
             - \(when): score \(e.score)/10 (\(e.scale.rawValue)); trend: \(e.trend); duration: \(e.durationMinutes) min;
@@ -268,185 +818,12 @@ private extension SessionDetailView {
               symptoms: \(joinOr(e.symptoms, empty: "none reported"));
               triggers: \(joinOr(e.triggers, empty: "unknown"));
               relievers: \(joinOr(e.relievers, empty: "unknown"));
+              medication: \(medicationLine);
               notes: \(notesShort.isEmpty ? "none" : notesShort).
             """)
         }
 
         return lines.joined(separator: "\n")
-    }
-}
-
-private struct PreparedNoteView: View {
-    @Environment(\.dismiss) private var dismiss
-    private let ai = PainPalAIClient()
-    @State private var isRunningTrend = false
-    @State private var isRunningTriage = false
-    @State private var trendResult: TrendSummary?
-    @State private var triageResult: PainPalAssessment?
-    @State private var errorText: String?
-
-    let childName: String
-    let ageDisplay: String?
-    let lastN: Int
-    let note: String
-
-    var body: some View {
-        Form {
-            Section("Preview") {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(childName)
-                        .font(.headline)
-                    if let ageDisplay {
-                        Text(ageDisplay)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Text("Using last \(lastN) record\(lastN == 1 ? "" : "s")")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Caregiver note to feed the model") {
-                Text(note)
-                    .font(.footnote)
-                    .textSelection(.enabled)
-            }
-
-            Section {
-                ShareLink(item: note) {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                }
-            }
-            
-            Section("AI") {
-                Button(isRunningTrend ? "Summarising..." : "Summarise trend") {
-                    Task {
-                        errorText = nil
-                        isRunningTrend = true
-                        defer { isRunningTrend = false }
-                        do {
-                            trendResult = try await ai.summariseTrend(from: note)
-                        } catch {
-                            errorText = String(describing: error)
-                        }
-                    }
-                }
-                .disabled(isRunningTrend || note.isEmpty)
-
-                Button(isRunningTriage ? "Analysing..." : "Assess red flags / next steps") {
-                    Task {
-                        errorText = nil
-                        isRunningTriage = true
-                        defer { isRunningTriage = false }
-                        do {
-                            // If trend exists, include it as context; otherwise assess directly from the note.
-                            if let t = trendResult {
-                                triageResult = try await ai.assess(from: note, trend: t)
-                            } else {
-                                triageResult = try await ai.assess(from: note)
-                            }
-                        } catch {
-                            errorText = String(describing: error)
-                        }
-                    }
-                }
-                .disabled(isRunningTriage || note.isEmpty)
-
-                if let err = errorText {
-                    Text(err).foregroundStyle(.red)
-                }
-            }
-            if let t = trendResult {
-                Section("TrendSummary") {
-                    Text("Trend: \(t.trend)")
-                        .font(.headline)
-
-                    if !t.scoreSeriesLatestToOldest.isEmpty {
-                        Text("Scores: " + t.scoreSeriesLatestToOldest.map(String.init).joined(separator: " → "))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Text(t.oneParagraphSummary)
-
-                    if !t.redFlags.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Red flags:")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-
-                            ForEach(Array(t.redFlags.enumerated()), id: \.offset) { _, flag in
-                                Text("• \(flag)")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-
-                    if !t.questionsToAskNext.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Questions:")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-
-                            ForEach(Array(t.questionsToAskNext.enumerated()), id: \.offset) { _, q in
-                                Text("• \(q)")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-                }
-            }
-
-            if let a = triageResult {
-                Section("PainPalAssessment") {
-                    Text("Danger level: \(a.dangerLevel)")
-                        .font(.headline)
-                    Text(a.whyThisLevel)
-                    Text(a.recommendedNextStep)
-
-                    if !a.questionsToAskNext.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Questions:")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-
-                            ForEach(Array(a.questionsToAskNext.enumerated()), id: \.offset) { _, q in
-                                Text("• \(q)")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-
-                    if !a.redFlagsDetected.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Red flags:")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-
-                            ForEach(Array(a.redFlagsDetected.enumerated()), id: \.offset) { _, flag in
-                                Text("• \(flag)")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .navigationTitle("Prepared Note")
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Done") { dismiss() }
-            }
-        }
     }
 }
 
@@ -794,3 +1171,10 @@ extension SessionDetailView {
     }
 }
 #endif
+
+private extension Calendar {
+    func startOfMonth(for date: Date) -> Date {
+        let components = dateComponents([.year, .month], from: date)
+        return self.date(from: components) ?? date
+    }
+}

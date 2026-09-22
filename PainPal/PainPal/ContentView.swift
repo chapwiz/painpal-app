@@ -11,36 +11,66 @@ import SwiftData
 struct ContentView: View {
     @Environment(\.modelContext) private var ctx
     @AppStorage("didSeedExampleData") private var didSeedExampleData = false
+    @AppStorage("userRole") private var userRoleRawValue = ""
+    @State private var selectedTab: RootTab = .sessions
+    @State private var searchString = ""
 
     var body: some View {
-        TabView {
-            NavigationStack {
-                SessionsView()
+        AuthGateView()
+            .task {
+                // Avoid double-seeding when running SwiftUI previews
+                if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" { return }
+
+                // Count all sessions + non-deleted sessions
+                let totalSessions = (try? ctx.fetchCount(FetchDescriptor<Session>())) ?? 0
+                let activeSessions = (try? ctx.fetchCount(FetchDescriptor<Session>(
+                    predicate: #Predicate<Session> { !$0.isDeleted }
+                ))) ?? 0
+
+                // If you already have at least 20 sessions, don’t seed.
+                if totalSessions >= 20 {
+                    didSeedExampleData = true
+                    return
+                }
+
+                // If you already have any active sessions, don’t seed.
+                if activeSessions > 0 {
+                    didSeedExampleData = true
+                    return
+                }
+
+                // Otherwise, seed (covers the case where you only have deleted sessions, or none at all)
+                seedExampleData()
+                didSeedExampleData = true
             }
-            .tabItem {
-                Label("Sessions", systemImage: "list.bullet")
+    }
+
+    @ViewBuilder
+    private func mainTabView(for role: UserRole) -> some View {
+        TabView(selection: $selectedTab) {
+            Tab("Home", systemImage: "house", value: .sessions) {
+                NavigationStack {
+                    switch role {
+                    case .parent:
+                        ParentHomeView()
+                    case .caregiver:
+                        SessionsView()
+                    }
+                }
             }
 
-            NavigationStack {
-                ExportView()
-            }
-            .tabItem {
-                Label("Export", systemImage: "square.and.arrow.up")
-            }
-
-            NavigationStack {
-                SettingsView()
-            }
-            .tabItem {
-                Label("Settings", systemImage: "gear")
+            if role == .caregiver {
+                Tab(value: .search, role: .search) {
+                    NavigationStack {
+                        SessionSearchView(searchString: $searchString)
+                    }
+                }
             }
 
-            // SpeechRecognizer.swift test
-            NavigationStack {
-                SpeechTestView()
-            }
-            .tabItem {
-                Label("Speech", systemImage: "mic")
+            Tab("Settings", systemImage: "gearshape", value: .settings) {
+                NavigationStack {
+                    SettingsView()
+                }
             }
         }
         .task {
@@ -69,6 +99,61 @@ struct ContentView: View {
             seedExampleData()
             didSeedExampleData = true
         }
+        .tabBarMinimizeBehavior(.onScrollDown)
+    }
+}
+
+enum RootTab: Hashable {
+    case sessions
+    case search
+    case settings
+}
+
+private struct SessionSearchView: View {
+    @Binding var searchString: String
+
+    @Query(
+        filter: #Predicate<Session> { !$0.isDeleted },
+        sort: [SortDescriptor(\Session.createdAt, order: .reverse)]
+    ) private var sessions: [Session]
+
+    private var filteredSessions: [Session] {
+        let trimmed = searchString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return sessions }
+        return sessions.filter {
+            $0.childName.localizedCaseInsensitiveContains(trimmed)
+        }
+    }
+
+    var body: some View {
+        List {
+            if filteredSessions.isEmpty {
+                ContentUnavailableView(
+                    "No matching sessions",
+                    systemImage: "magnifyingglass",
+                    description: Text(searchString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? "Start typing to search by child name."
+                        : "Try a different name.")
+                )
+            } else {
+                ForEach(filteredSessions) { session in
+                    NavigationLink {
+                        SessionDetailView(session: session)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(session.childName)
+                                .font(.headline)
+
+                            Text(session.createdAt.formatted(date: .abbreviated, time: .omitted))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Search")
+        .searchable(text: $searchString, prompt: "Search sessions")
     }
 }
 
@@ -133,35 +218,3 @@ extension ContentView {
         DemoDataSeeder.seed(ctx: ctx, sessionCount: 24)
     }
 }
-
-// MARK: - Placeholder tabs (replace with real views later)
-
-//#Preview("ContentView") {
-//    let config = ModelConfiguration(isStoredInMemoryOnly: true)
-//    let container = try! ModelContainer(for: Session.self, PainEntry.self, configurations: config)
-//    let ctx = container.mainContext
-//
-//    // Ensure preview always shows sample data
-//    UserDefaults.standard.set(false, forKey: "didSeedExampleData")
-//
-//    let amy = Session(childName: "Amy")
-//    let ben = Session(childName: "Ben")
-//
-//    // Show one item in Recently Deleted
-//    ben.isDeleted = true
-//    ben.deletedAt = Date()
-//
-//    let e1 = PainEntry(scale: .wongBaker, score: 6, notes: "Crying after meal", transcript: nil, aiSummary: nil)
-//    let e2 = PainEntry(scale: .rFLACC, score: 4, notes: "Settled after rest", transcript: nil, aiSummary: nil)
-//
-//    let _ = {
-//        ctx.insert(amy)
-//        ctx.insert(ben)
-//        ctx.insert(e1)
-//        ctx.insert(e2)
-//        amy.entries.append(contentsOf: [e1, e2])
-//    }()
-//
-//    return ContentView()
-//        .modelContainer(container)
-//}

@@ -7,17 +7,57 @@
 
 import SwiftUI
 import SwiftData
-import MultiPicker
+import UserNotifications
 
 struct RecordEntryView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var ctx
-    @Bindable var session: Session
+    let session: Session
+
+
+    private func requestNotificationPermissionIfNeeded() {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard settings.authorizationStatus == .notDetermined else { return }
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        }
+    }
+
+    private func scheduleNotificationsIfNeeded(for entry: PainEntry) {
+        print("=== Scheduling notifications for entry ===")
+        print("Symptoms:", entry.symptoms)
+        print("Triggers:", entry.triggers)
+        print("Relievers:", entry.relievers)
+        print("Medicine taken:", entry.medicineTaken)
+        print("Medicine name:", entry.medicineName)
+        print("Next medication reminder date:", String(describing: entry.nextMedicationReminderDate))
+
+        let recentEntries = session.entries
+            .filter { !$0.isDeleted && $0.persistentModelID != entry.persistentModelID }
+            .sorted { $0.timestamp > $1.timestamp }
+            .prefix(5)
+
+        let plans = EntryNotificationBuilder.buildPlans(
+            for: entry,
+            recentEntries: Array(recentEntries)
+        )
+
+        print("Recent entries considered:", recentEntries.count)
+        print("Notification plans generated:", plans.count)
+        for plan in plans {
+            print("- [\(plan.id)] \(plan.title) | delay: \(plan.timeInterval)s")
+            print("  body: \(plan.body)")
+        }
+
+        NotificationManager.shared.scheduleAll(plans)
+        print("=== Finished scheduling notifications ===")
+    }
+
 
     // If non-nil, the view edits an existing entry instead of creating a new one.
     private var editingEntry: PainEntry?
     
     @Environment(\.colorScheme) private var colorScheme
+    @FocusState private var focusedField: FocusField?
 
     @State private var scale: PainScale = .rFLACC
     @State private var score: Int = 0
@@ -34,6 +74,7 @@ struct RecordEntryView: View {
     // Multi-select fields (stored on PainEntry as [String])
     @State private var selectedLocations: Set<String> = []
     @State private var otherLocation: String = ""
+    @State private var locationInputMode: LocationInputMode = .hybrid
 
     @State private var selectedQualities: Set<String> = []
     @State private var otherQuality: String = ""
@@ -44,8 +85,17 @@ struct RecordEntryView: View {
     @State private var selectedTriggers: Set<String> = []
     @State private var otherTrigger: String = ""
 
+
     @State private var selectedRelievers: Set<String> = []
     @State private var otherReliever: String = ""
+
+    // Medication fields
+    @State private var medicineTaken: Bool = false
+    @State private var medicineName: String = ""
+    @State private var hasNextMedicationReminder: Bool = false
+    @State private var nextMedicationReminderDate: Date = Date().addingTimeInterval(60 * 60)
+    @State private var medicationInstructions: String = ""
+
 
     private var durationText: String {
         if durationMinutes <= 0 { return "Just started" }
@@ -55,6 +105,134 @@ struct RecordEntryView: View {
             return minutes > 0 ? "\(hours)h \(minutes)m" : "\(hours)h"
         }
         return "\(minutes)m"
+    }
+
+
+    private func durationOptionLabel(_ minutes: Int) -> String {
+        if minutes <= 0 { return "Just started" }
+        let hours = minutes / 60
+        let mins = minutes % 60
+        if hours > 0 {
+            return mins > 0 ? "\(hours)h \(mins)m" : "\(hours)h"
+        }
+        return "\(mins)m"
+    }
+
+    private let durationHourOptions: [Int] = Array(0...24)
+    private let durationMinuteOptions: [Int] = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
+
+    private var selectedDurationHours: Binding<Int> {
+        Binding(
+            get: { durationMinutes / 60 },
+            set: { newHours in
+                let currentMinutes = durationMinutes % 60
+                durationMinutes = (newHours * 60) + currentMinutes
+            }
+        )
+    }
+
+    private var selectedDurationRemainderMinutes: Binding<Int> {
+        Binding(
+            get: { durationMinutes % 60 },
+            set: { newMinutes in
+                let currentHours = durationMinutes / 60
+                durationMinutes = (currentHours * 60) + newMinutes
+            }
+        )
+    }
+
+    private enum LocationInputMode: String, CaseIterable, Identifiable {
+        case text = "Text"
+        case diagram = "Body Diagram"
+        case hybrid = "Hybrid"
+
+        var id: String { rawValue }
+    }
+
+    private enum FocusField: Hashable {
+        case otherLocation
+        case otherQuality
+        case otherSymptom
+        case otherTrigger
+        case otherReliever
+        case medicineName
+        case medicationInstructions
+        case notes
+    }
+
+    private var predefinedLocationValues: Set<String> {
+        Set(PainLocation.allCases.map { $0.rawValue })
+    }
+
+    private var diagramSelection: Binding<Set<PainLocation>> {
+        Binding<Set<PainLocation>>(
+            get: {
+                Set(selectedLocations.compactMap(PainLocation.init(rawValue:)))
+            },
+            set: { newValue in
+                let customLocations = selectedLocations.filter { !predefinedLocationValues.contains($0) }
+                selectedLocations = customLocations.union(Set(newValue.map(\.rawValue)))
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var painLocationSection: some View {
+        Section {
+            if locationInputMode == .hybrid {
+                BodyDiagramSelectorView(selectedLocations: diagramSelection)
+                    .padding(.vertical, 4)
+            }
+
+            if locationInputMode == .hybrid {
+                HStack {
+                    TextField("Other location…", text: $otherLocation)
+                        .focused($focusedField, equals: .otherLocation)
+                        .submitLabel(.done)
+                        .onSubmit {
+                            let trimmed = otherLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !trimmed.isEmpty else { return }
+                            selectedLocations.insert(trimmed)
+                            otherLocation = ""
+                            focusedField = nil
+                        }
+
+                    Button {
+                        let trimmed = otherLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty else { return }
+                        selectedLocations.insert(trimmed)
+                        otherLocation = ""
+                        focusedField = nil
+                    } label: {
+                        Text("Add")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(otherLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+
+            let customItems = selectedLocations
+                .filter { !predefinedLocationValues.contains($0) }
+                .sorted()
+
+            if !customItems.isEmpty {
+                ForEach(customItems, id: \.self) { item in
+                    Toggle(item, isOn: Binding(
+                        get: { selectedLocations.contains(item) },
+                        set: { isOn in
+                            if isOn { selectedLocations.insert(item) } else { selectedLocations.remove(item) }
+                        }
+                    ))
+                }
+            }
+        } header: {
+            Text("Pain areas")
+        }
+        footer: {
+            Text("Choose pain areas on the body diagram or add a custom location.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
     }
 
 
@@ -69,54 +247,127 @@ struct RecordEntryView: View {
 
         @Binding var selection: Set<String>
         @Binding var otherText: String
+        let focus: FocusState<FocusField?>.Binding
+        let focusField: FocusField
+        @State private var isExpanded = false
+        @State private var storedCustomItems: [String] = []
 
-        private var predefinedSet: Set<String> {
-            Set(Option.allCases.map { $0.rawValue })
+        private let columns: [GridItem] = [
+            GridItem(.adaptive(minimum: 110), spacing: 10, alignment: .leading)
+        ]
+
+        private var predefinedItems: [String] {
+            Array(Option.allCases.map { $0.rawValue }).sorted()
         }
 
         private var customItems: [String] {
-            selection
-                .filter { !predefinedSet.contains($0) }
-                .sorted()
+            storedCustomItems.sorted()
+        }
+
+        private var allItems: [String] {
+            predefinedItems + customItems
+        }
+
+        private var selectionSummary: String {
+            let items = selection.sorted()
+            if items.isEmpty { return "None selected" }
+            if items.count <= 3 { return items.joined(separator: ", ") }
+            return "\(items.prefix(3).joined(separator: ", ")) +\(items.count - 3) more"
+        }
+
+        private var storageKey: String {
+            "painpal.custom.\(String(describing: Option.self))"
+        }
+
+        private func toggle(_ item: String) {
+            if selection.contains(item) {
+                selection.remove(item)
+            } else {
+                selection.insert(item)
+            }
+        }
+
+        private func loadCustomItems() {
+            let saved = UserDefaults.standard.stringArray(forKey: storageKey) ?? []
+            storedCustomItems = Array(Set(saved)).sorted()
+        }
+
+        private func saveCustomItems() {
+            UserDefaults.standard.set(storedCustomItems.sorted(), forKey: storageKey)
         }
 
         private func addOther() {
             let trimmed = otherText.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
+
+            if !predefinedItems.contains(trimmed) && !storedCustomItems.contains(trimmed) {
+                storedCustomItems.append(trimmed)
+                storedCustomItems.sort()
+                saveCustomItems()
+            }
+
             selection.insert(trimmed)
             otherText = ""
         }
 
         var body: some View {
             Section {
-                MultiPicker(pickerLabel, selection: $selection) {
-                    ForEach(Array(Option.allCases), id: \.id) { opt in
-                        Text(opt.rawValue)
-                            .mpTag(opt.rawValue)
-                    }
-                }
-                .mpPickerStyle(.navigationLink)
-
-                HStack {
-                    TextField(otherPlaceholder, text: $otherText)
-                    Button("Add") { addOther() }
-                        .disabled(otherText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-
-                if !customItems.isEmpty {
-                    Divider()
-
-                    Text("Custom")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-
-                    ForEach(customItems, id: \.self) { item in
-                        Toggle(item, isOn: Binding(
-                            get: { selection.contains(item) },
-                            set: { isOn in
-                                if isOn { selection.insert(item) } else { selection.remove(item) }
+                DisclosureGroup(isExpanded: $isExpanded) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+                            ForEach(allItems, id: \.self) { item in
+                                Button {
+                                    toggle(item)
+                                } label: {
+                                    Text(item)
+                                        .font(.subheadline)
+                                        .foregroundStyle(selection.contains(item) ? Color.white : Color.primary)
+                                        .multilineTextAlignment(.leading)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 10)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                .fill(selection.contains(item) ? Color.green : Color.gray.opacity(0.18))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                .stroke(selection.contains(item) ? Color.green : Color.gray.opacity(0.25), lineWidth: 1)
+                                        )
+                                }
+                                .buttonStyle(.plain)
                             }
-                        ))
+                        }
+
+                        HStack {
+                            TextField(otherPlaceholder, text: $otherText)
+                                .focused(focus, equals: focusField)
+                                .submitLabel(.done)
+                                .onSubmit {
+                                    addOther()
+                                    focus.wrappedValue = nil
+                                }
+
+                            Button {
+                                addOther()
+                                focus.wrappedValue = nil
+                            } label: {
+                                Text("Add")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(otherText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(pickerLabel)
+                            .foregroundStyle(.primary)
+
+                        Text(selectionSummary)
+                            .font(.footnote)
+                            .foregroundStyle(selection.isEmpty ? .secondary : .primary)
+                            .lineLimit(2)
                     }
                 }
             } header: {
@@ -125,6 +376,9 @@ struct RecordEntryView: View {
                 Text(footer)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+            .onAppear {
+                loadCustomItems()
             }
         }
     }
@@ -156,14 +410,29 @@ struct RecordEntryView: View {
             _otherSymptom = State(initialValue: "")
             _otherTrigger = State(initialValue: "")
             _otherReliever = State(initialValue: "")
+            _locationInputMode = State(initialValue: .hybrid)
+            // Preload medication fields when editing an existing entry.
+            _medicineTaken = State(initialValue: e.medicineTaken)
+            _medicineName = State(initialValue: e.medicineName)
+            _hasNextMedicationReminder = State(initialValue: e.nextMedicationReminderDate != nil)
+            _nextMedicationReminderDate = State(initialValue: e.nextMedicationReminderDate ?? Date().addingTimeInterval(60 * 60))
+            _medicationInstructions = State(initialValue: e.medicationInstructions)
         } else {
             // New entry
+            _locationInputMode = State(initialValue: .hybrid)
             self.editingEntry = nil
+            _medicineTaken = State(initialValue: false)
+            _medicineName = State(initialValue: "")
+            _hasNextMedicationReminder = State(initialValue: false)
+            _nextMedicationReminderDate = State(initialValue: Date().addingTimeInterval(60 * 60))
+            _medicationInstructions = State(initialValue: "")
         }
     }
 
     var body: some View {
         Form {
+            painLocationSection
+
             Section {
                 Picker("Scale", selection: $scale) {
                     ForEach(PainScale.allCases) { s in
@@ -209,7 +478,7 @@ struct RecordEntryView: View {
                 }
                 .pickerStyle(.segmented)
 
-                Stepper(value: $durationMinutes, in: 0...24*60, step: 5) {
+                VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Duration")
                         Spacer()
@@ -217,19 +486,31 @@ struct RecordEntryView: View {
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }
+
+                    HStack(spacing: 0) {
+                        Picker("Hours", selection: selectedDurationHours) {
+                            ForEach(durationHourOptions, id: \.self) { hour in
+                                Text("\(hour) h").tag(hour)
+                            }
+                        }
+                        .pickerStyle(.wheel)
+                        .frame(maxWidth: .infinity)
+                        .clipped()
+
+                        Picker("Minutes", selection: selectedDurationRemainderMinutes) {
+                            ForEach(durationMinuteOptions, id: \.self) { minute in
+                                Text("\(minute) m").tag(minute)
+                            }
+                        }
+                        .pickerStyle(.wheel)
+                        .frame(maxWidth: .infinity)
+                        .clipped()
+                    }
+                    .frame(height: 120)
                 }
             } header: {
                 Text("Pain Assessment")
             }
-
-            MultiSelectSection<PainLocation>(
-                title: "Pain areas",
-                footer: "Select one or more areas. Add a custom area if needed.",
-                pickerLabel: "Choose areas",
-                otherPlaceholder: "Other location…",
-                selection: $selectedLocations,
-                otherText: $otherLocation
-            )
 
             MultiSelectSection<PainQuality>(
                 title: "Pain quality",
@@ -237,7 +518,9 @@ struct RecordEntryView: View {
                 pickerLabel: "Choose qualities",
                 otherPlaceholder: "Other quality…",
                 selection: $selectedQualities,
-                otherText: $otherQuality
+                otherText: $otherQuality,
+                focus: $focusedField,
+                focusField: .otherQuality
             )
 
             MultiSelectSection<Symptom>(
@@ -246,7 +529,9 @@ struct RecordEntryView: View {
                 pickerLabel: "Choose symptoms",
                 otherPlaceholder: "Other symptom…",
                 selection: $selectedSymptoms,
-                otherText: $otherSymptom
+                otherText: $otherSymptom,
+                focus: $focusedField,
+                focusField: .otherSymptom
             )
 
             MultiSelectSection<Trigger>(
@@ -255,7 +540,9 @@ struct RecordEntryView: View {
                 pickerLabel: "Choose triggers",
                 otherPlaceholder: "Other trigger…",
                 selection: $selectedTriggers,
-                otherText: $otherTrigger
+                otherText: $otherTrigger,
+                focus: $focusedField,
+                focusField: .otherTrigger
             )
 
             MultiSelectSection<Reliever>(
@@ -264,11 +551,45 @@ struct RecordEntryView: View {
                 pickerLabel: "Choose relievers",
                 otherPlaceholder: "Other reliever…",
                 selection: $selectedRelievers,
-                otherText: $otherReliever
+                otherText: $otherReliever,
+                focus: $focusedField,
+                focusField: .otherReliever
             )
 
             Section {
-                TextEditor(text: $notes).frame(minHeight: 90)
+                Toggle("Medicine taken", isOn: $medicineTaken)
+
+                if medicineTaken {
+                    TextField("Medicine name", text: $medicineName)
+                        .focused($focusedField, equals: .medicineName)
+                        .submitLabel(.done)
+
+                    Toggle("Set next medication reminder", isOn: $hasNextMedicationReminder)
+
+                    if hasNextMedicationReminder {
+                        DatePicker(
+                            "Next reminder",
+                            selection: $nextMedicationReminderDate,
+                            displayedComponents: [.date, .hourAndMinute]
+                        )
+                    }
+
+                    TextField("Instructions (e.g. after food)", text: $medicationInstructions, axis: .vertical)
+                        .focused($focusedField, equals: .medicationInstructions)
+                        .lineLimit(2...4)
+                }
+            } header: {
+                Text("Medication")
+            } footer: {
+                Text("Log medicine taken, an optional next reminder time, and any caregiver instructions.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                TextEditor(text: $notes)
+                    .focused($focusedField, equals: .notes)
+                    .frame(minHeight: 90)
             } header: {
                 Text("Notes")
             } footer: {
@@ -282,15 +603,11 @@ struct RecordEntryView: View {
 //                TextField("AI summary (optional)", text: $aiSummary, axis: .vertical)
 //            }
         }
-        .navigationTitle(editingEntry == nil ? "Record" : "Edit Record")
+        .scrollDismissesKeyboard(.interactively)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }
-            }
             ToolbarItem(placement: .confirmationAction) {
                 Button(editingEntry == nil ? "Save" : "Update") {
                     if let e = editingEntry {
-                        // Update existing entry in-place
                         e.scale = scale
                         e.score = score
                         e.notes = notes
@@ -303,20 +620,35 @@ struct RecordEntryView: View {
 
                         e.trend = trend
                         e.durationMinutes = durationMinutes
-
                         e.locations = Array(selectedLocations).sorted()
                         e.qualityWords = Array(selectedQualities).sorted()
                         e.symptoms = Array(selectedSymptoms).sorted()
                         e.triggers = Array(selectedTriggers).sorted()
                         e.relievers = Array(selectedRelievers).sorted()
-
-                        // Defensive: ensure it isn't in Recently Deleted
+                        e.medicineTaken = medicineTaken
+                        e.medicineName = medicineName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        e.nextMedicationReminderDate = medicineTaken && hasNextMedicationReminder ? nextMedicationReminderDate : nil
+                        e.medicationInstructions = medicationInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
                         e.isDeleted = false
 
                         try? ctx.save()
+                        requestNotificationPermissionIfNeeded()
+
+                        if let reminderDate = e.nextMedicationReminderDate,
+                           e.medicineTaken,
+                           !e.medicineName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            print("Scheduling medication reminder for edited entry:", e.medicineName, "at", reminderDate)
+                            NotificationManager.shared.scheduleMedicationReminder(
+                                entryID: UUID(),
+                                childName: session.childName,
+                                medicineName: e.medicineName,
+                                instructions: e.medicationInstructions,
+                                reminderDate: reminderDate
+                            )
+                        }
+
                         dismiss()
                     } else {
-                        // Create new entry
                         let entry = PainEntry(
                             scale: scale,
                             score: score,
@@ -330,10 +662,30 @@ struct RecordEntryView: View {
                             symptoms: Array(selectedSymptoms).sorted(),
                             triggers: Array(selectedTriggers).sorted(),
                             relievers: Array(selectedRelievers).sorted(),
+                            medicineTaken: medicineTaken,
+                            medicineName: medicineName.trimmingCharacters(in: .whitespacesAndNewlines),
+                            nextMedicationReminderDate: medicineTaken && hasNextMedicationReminder ? nextMedicationReminderDate : nil,
+                            medicationInstructions: medicationInstructions.trimmingCharacters(in: .whitespacesAndNewlines),
                             session: session
                         )
                         ctx.insert(entry)
                         try? ctx.save()
+                        requestNotificationPermissionIfNeeded()
+                        scheduleNotificationsIfNeeded(for: entry)
+
+                        if let reminderDate = entry.nextMedicationReminderDate,
+                           entry.medicineTaken,
+                           !entry.medicineName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            print("Scheduling medication reminder for new entry:", entry.medicineName, "at", reminderDate)
+                            NotificationManager.shared.scheduleMedicationReminder(
+                                entryID: UUID(),
+                                childName: session.childName,
+                                medicineName: entry.medicineName,
+                                instructions: entry.medicationInstructions,
+                                reminderDate: reminderDate
+                            )
+                        }
+
                         dismiss()
                     }
                 }
